@@ -2,6 +2,11 @@ import { db, openDB } from './db.js';
 import * as auth from './auth.js';
 import { icon, escapeHtml, formatBytes, formatDate, showDialog, toast } from './ui.js';
 
+// Bumped by hand with each deploy. It is printed on the lock screen so the
+// running build can be read out loud, which separates "stale cached page"
+// from "real bug" without guessing.
+const BUILD = 'build 6';
+
 // Tells the guard in index.html that the app really started, so a working
 // app never shows its "did not start" panel.
 window.__deluxeDriveStarted = true;
@@ -1219,6 +1224,9 @@ async function enterApp() {
 }
 
 async function initAuthScreen() {
+  const buildNode = $('#auth-build');
+  if (buildNode) buildNode.textContent = BUILD;
+
   const exists = await auth.hasAccount();
 
   $('#auth-sub').textContent = exists

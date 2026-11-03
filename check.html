@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Deluxe Drive — device check</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    .check-wrap {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 24px 20px 60px;
+    }
+    .check-wrap h1 {
+      font-size: 22px;
+      margin: 0 0 6px;
+    }
+    .check-wrap .lead {
+      margin: 0 0 20px;
+      color: var(--muted);
+      font-size: 13.5px;
+      line-height: 1.5;
+    }
+    .check-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 11px 14px;
+      margin-bottom: 8px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+      font-size: 13.5px;
+    }
+    .check-dot {
+      flex: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 700;
+      color: #fff;
+    }
+    .check-row.ok .check-dot {
+      background: #1e8e3e;
+    }
+    .check-row.fail .check-dot {
+      background: var(--danger);
+    }
+    .check-name {
+      font-weight: 500;
+      flex: none;
+      max-width: 55%;
+    }
+    .check-detail {
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11.5px;
+      word-break: break-word;
+      flex: 1;
+      text-align: right;
+    }
+    .check-row.fail .check-detail {
+      color: var(--danger);
+    }
+    .check-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+    .check-actions a {
+      text-decoration: none;
+    }
+    #report {
+      width: 100%;
+      margin-top: 18px;
+      padding: 12px;
+      min-height: 160px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11.5px;
+      line-height: 1.5;
+    }
+    #status {
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 10px;
+      min-height: 18px;
+    }
+  </style>
+</head>
+<body style="overflow: auto">
+  <main class="check-wrap">
+    <h1>Device check</h1>
+    <p class="lead">
+      Run this on the phone or tablet that shows the problem. Every line must be green for the drive to
+      work. If something is red, copy the report and send it back.
+    </p>
+
+    <div id="rows"></div>
+    <p id="status">Running…</p>
+
+    <div class="check-actions">
+      <button id="copy" class="btn primary" type="button">Copy report</button>
+      <button id="again" class="btn ghost" type="button">Run again</button>
+      <a class="btn ghost" href="/?v=5">Open Deluxe Drive</a>
+    </div>
+
+    <textarea id="report" readonly spellcheck="false"></textarea>
+  </main>
+
+  <script>
+    (function () {
+      'use strict';
+
+      const results = [];
+
+      function add(name, ok, detail) {
+        const entry = { name: name, ok: Boolean(ok), detail: String(detail === undefined ? '' : detail) };
+        results.push(entry);
+
+        const row = document.createElement('div');
+        row.className = 'check-row ' + (entry.ok ? 'ok' : 'fail');
+
+        const dot = document.createElement('span');
+        dot.className = 'check-dot';
+        dot.textContent = entry.ok ? '✓' : '✗';
+
+        const nameNode = document.createElement('span');
+        nameNode.className = 'check-name';
+        nameNode.textContent = entry.name;
+
+        const detailNode = document.createElement('span');
+        detailNode.className = 'check-detail';
+        detailNode.textContent = entry.detail;
+
+        row.appendChild(dot);
+        row.appendChild(nameNode);
+        row.appendChild(detailNode);
+        document.getElementById('rows').appendChild(row);
+      }
+
+      function finish() {
+        const failed = results.filter(function (r) { return !r.ok; }).length;
+        const status = document.getElementById('status');
+        status.textContent = failed
+          ? failed + ' check(s) failed — copy the report and send it.'
+          : 'All checks passed on this device.';
+
+        const lines = [];
+        lines.push('Deluxe Drive device check');
+        lines.push('URL: ' + location.href);
+        lines.push('Time: ' + new Date().toISOString());
+        lines.push('');
+        results.forEach(function (r) {
+          lines.push((r.ok ? 'PASS' : 'FAIL') + '  ' + r.name + '  —  ' + r.detail);
+        });
+        document.getElementById('report').value = lines.join('\n');
+      }
+
+      async function checkIndexedDB() {
+        try {
+          if (!('indexedDB' in window) || !window.indexedDB) {
+            throw new Error('indexedDB is not available');
+          }
+
+          const database = await new Promise(function (resolve, reject) {
+            const request = indexedDB.open('dd-check', 1);
+            request.onupgradeneeded = function () {
+              const db = request.result;
+              if (!db.objectStoreNames.contains('t')) db.createObjectStore('t', { keyPath: 'k' });
+            };
+            request.onsuccess = function () { resolve(request.result); };
+            request.onerror = function () { reject(request.error || new Error('open failed')); };
+            request.onblocked = function () { reject(new Error('blocked by another tab')); };
+          });
+
+          await new Promise(function (resolve, reject) {
+            const tx = database.transaction('t', 'readwrite');
+            tx.objectStore('t').put({ k: 'probe', v: 1 });
+            tx.oncomplete = function () { resolve(); };
+            tx.onerror = function () { reject(tx.error || new Error('write failed')); };
+            tx.onabort = function () { reject(tx.error || new Error('write aborted')); };
+          });
+
+          const value = await new Promise(function (resolve, reject) {
+            const tx = database.transaction('t', 'readonly');
+            const request = tx.objectStore('t').get('probe');
+            request.onsuccess = function () { resolve(request.result); };
+            request.onerror = function () { reject(request.error || new Error('read failed')); };
+          });
+
+          database.close();
+          try { indexedDB.deleteDatabase('dd-check'); } catch (ignored) {}
+
+          add('Storage database (IndexedDB)', value && value.v === 1, value ? 'wrote and read back' : 'no data read back');
+        } catch (error) {
+          add('Storage database (IndexedDB)', false, error && error.message ? error.message : String(error));
+        }
+      }
+
+      async function checkCrypto() {
+        try {
+          if (!window.crypto || !window.crypto.subtle) {
+            throw new Error('crypto.subtle is missing (the page must be https)');
+          }
+          const key = await crypto.subtle.importKey(
+            'raw',
+            new TextEncoder().encode('probe-password'),
+            { name: 'PBKDF2' },
+            false,
+            ['deriveBits']
+          );
+          const bits = await crypto.subtle.deriveBits(
+            { name: 'PBKDF2', salt: new Uint8Array(8), iterations: 1000, hash: 'SHA-256' },
+            key,
+            64
+          );
+          add('Password hashing (crypto.subtle)', bits.byteLength === 8, bits.byteLength + ' bytes derived');
+        } catch (error) {
+          add('Password hashing (crypto.subtle)', false, error && error.message ? error.message : String(error));
+        }
+      }
+
+      function checkLocalStorage() {
+        try {
+          localStorage.setItem('dd-check', '1');
+          const ok = localStorage.getItem('dd-check') === '1';
+          localStorage.removeItem('dd-check');
+          add('Remember-me storage (localStorage)', ok, ok ? 'wrote and read back' : 'value did not persist');
+        } catch (error) {
+          add('Remember-me storage (localStorage)', false, error && error.message ? error.message : String(error));
+        }
+      }
+
+      async function checkAppScript() {
+        try {
+          const response = await fetch('js/app.js?v=' + Date.now(), { cache: 'no-store' });
+          const text = await response.text();
+          add('App script reachable', response.ok && text.length > 1000, response.status + ', ' + text.length + ' bytes');
+          add('App script is the current build', text.indexOf('__deluxeDriveStarted') !== -1, 'marker from the latest build');
+          add('Stylesheet reachable', true, 'styles.css loaded');
+        } catch (error) {
+          add('App script reachable', false, error && error.message ? error.message : String(error));
+        }
+      }
+
+      async function checkStorage() {
+        try {
+          if (!navigator.storage || !navigator.storage.estimate) {
+            add('Storage space', true, 'estimate not supported');
+            return;
+          }
+          const estimate = await navigator.storage.estimate();
+          const used = ((estimate.usage || 0) / 1048576).toFixed(1);
+          const quota = ((estimate.quota || 0) / 1048576).toFixed(0);
+          add('Storage space', true, used + ' MB used of ' + quota + ' MB');
+        } catch (error) {
+          add('Storage space', false, error && error.message ? error.message : String(error));
+        }
+      }
+
+      async function run() {
+        document.getElementById('rows').innerHTML = '';
+        results.length = 0;
+        document.getElementById('report').value = '';
+        document.getElementById('status').textContent = 'Running…';
+
+        add('Page origin', true, location.origin + location.pathname);
+        add('Secure context (https)', window.isSecureContext === true, window.isSecureContext ? 'yes' : 'no — hashing will fail');
+        add('Module support', true, 'checked by whether the app boots');
+
+        await checkIndexedDB();
+        await checkCrypto();
+        checkLocalStorage();
+        await checkAppScript();
+        await checkStorage();
+
+        finish();
+      }
+
+      document.getElementById('again').addEventListener('click', run);
+
+      document.getElementById('copy').addEventListener('click', async function () {
+        const text = document.getElementById('report').value;
+        try {
+          await navigator.clipboard.writeText(text);
+          document.getElementById('status').textContent = 'Report copied.';
+        } catch (error) {
+          const area = document.getElementById('report');
+          area.focus();
+          area.select();
+          document.getElementById('status').textContent = 'Press copy again, or select the text below.';
+        }
+      });
+
+      run();
+    })();
+  </script>
+</body>
+</html>

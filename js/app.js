@@ -1249,6 +1249,17 @@ function bindAuthScreen() {
   });
 
   $('#auth-reset').addEventListener('click', resetDrive);
+
+  // Clear a previous error as soon as the user starts correcting the input,
+  // so an old "Passwords do not match" never sits there while typing.
+  ['#auth-password', '#auth-password2'].forEach((selector) => {
+    const field = $(selector);
+    if (!field) return;
+    field.addEventListener('input', () => {
+      const error = $('#auth-error');
+      if (error) error.textContent = '';
+    });
+  });
 }
 
 async function boot() {

@@ -1,11 +1,12 @@
 import { db, openDB } from './db.js';
 import * as auth from './auth.js';
-import { icon, escapeHtml, formatBytes, formatDate, showDialog, toast } from './ui.js';
+import { icon, escapeHtml, formatBytes, formatDate, formatDateTime, showDialog, toast } from './ui.js';
+import { officeType, renderOfficePreview, renderDelimited } from './office.js';
 
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 9';
+const BUILD = 'build 10';
 
 // Tells the lock-screen fallback in index.html that the app really started.
 window.__deluxeDriveStarted = true;
@@ -124,6 +125,10 @@ const state = {
   prevView: 'drive',
   suppressClick: 0,
   previewId: null,
+  previewIds: [],
+  previewIndex: -1,
+  selectMode: false,
+  selected: new Set(),
 };
 
 const objUrls = new Map(); // nodeId -> object URL (thumbnails and previews)
@@ -337,31 +342,37 @@ function sortItems(items) {
 /* Rendering                                                           */
 /* ------------------------------------------------------------------ */
 
-function cardHtml(node) {
+function cardHtml(node, counts) {
   const isFolder = node.type === 'folder';
   const kind = isFolder ? 'folder' : fileKind(node.mime, node.name);
   const star = node.starred ? `<span class="star-badge">${icon('star')}</span>` : '';
+  const selected = state.selectMode && state.selected.has(node.id);
+  const badge = selected ? `<span class="select-badge">${icon('check')}</span>` : '';
 
   let meta;
   if (state.view === 'trash') {
     meta = `Deleted ${formatDate(node.trashedAt)}`;
-  } else if (state.view === 'search' || state.view === 'starred') {
-    meta = isFolder ? 'Folder' : `${formatBytes(node.size)} · ${formatDate(node.updatedAt)}`;
   } else if (isFolder) {
-    meta = 'Folder';
+    const count = counts && counts.has(node.id) ? counts.get(node.id) : 0;
+    meta = `${count} item${count === 1 ? '' : 's'}`;
   } else {
     meta = `${formatBytes(node.size)} · ${formatDate(node.updatedAt)}`;
   }
 
+  const menuButton = state.selectMode
+    ? ''
+    : `<button class="card-menu" type="button" data-menu="${node.id}" aria-label="More actions for ${escapeHtml(node.name)}">${icon('more')}</button>`;
+
   return `
-    <div class="card" data-id="${node.id}" tabindex="0" role="button" aria-label="${escapeHtml(node.name)}">
+    <div class="card${selected ? ' selected' : ''}" data-id="${node.id}" tabindex="0" role="button" aria-pressed="${selected ? 'true' : 'false'}" aria-label="${escapeHtml(node.name)}">
       <div class="card-thumb ${kind}" data-thumb="${node.id}">${icon(iconForKind(kind))}</div>
       <div class="card-body">
         <p class="card-name" title="${escapeHtml(node.name)}">${escapeHtml(node.name)}</p>
         <p class="card-meta">${escapeHtml(meta)}</p>
       </div>
       ${star}
-      <button class="card-menu" type="button" data-menu="${node.id}" aria-label="More actions for ${escapeHtml(node.name)}">${icon('more')}</button>
+      ${badge}
+      ${menuButton}
     </div>`;
 }
 
@@ -478,14 +489,23 @@ function render() {
   renderCrumbs();
 
   const items = sortItems(currentItems());
+
+  // One pass to know how many items each folder holds, for the card meta.
+  const counts = new Map();
+  for (const node of state.nodes.values()) {
+    if (node.trashed || !node.parentId) continue;
+    counts.set(node.parentId, (counts.get(node.parentId) || 0) + 1);
+  }
+
   const grid = $('#file-grid');
   grid.className = state.layout === 'list' ? 'file-list' : 'file-grid';
-  grid.innerHTML = items.map(cardHtml).join('');
+  grid.innerHTML = items.map((node) => cardHtml(node, counts)).join('');
 
   renderEmpty(items);
   $('#view-toggle').innerHTML = icon(state.layout === 'grid' ? 'list' : 'grid');
   $('#sort-select').value = state.sort;
 
+  updateSelectionBar();
   renderStorage();
   hydrateThumbs(items);
 }
@@ -566,6 +586,7 @@ function openNodeMenu(id, anchor) {
       icon: node.starred ? 'star-off' : 'star',
     });
     items.push({ action: 'rename', label: 'Rename', icon: 'edit' });
+    items.push({ action: 'info', label: 'Details', icon: 'info' });
     items.push({ action: 'move', label: 'Move to…', icon: 'folder' });
     items.push({ action: 'delete', label: 'Remove', icon: 'trash', danger: true });
   }
@@ -601,6 +622,11 @@ async function performNodeAction(action, id) {
     state.nodes.set(node.id, node);
     render();
     toast('Renamed');
+    return;
+  }
+
+  if (action === 'info') {
+    showDetailsDialog(node);
     return;
   }
 
@@ -656,9 +682,14 @@ async function performNodeAction(action, id) {
   }
 }
 
-async function deleteForever(node) {
-  const ids = new Set([node.id, ...descendantIds(node.id)]);
+async function removeForever(ids) {
+  const all = new Set();
   for (const id of ids) {
+    all.add(id);
+    descendantIds(id).forEach((child) => all.add(child));
+  }
+
+  for (const id of all) {
     await db.deleteNode(id);
     await db.deleteBlob(id);
     const url = objUrls.get(id);
@@ -668,6 +699,10 @@ async function deleteForever(node) {
     }
     state.nodes.delete(id);
   }
+}
+
+async function deleteForever(node) {
+  await removeForever([node.id]);
   render();
   toast('Deleted forever');
 }
@@ -736,12 +771,18 @@ function openNode(id) {
   const node = state.nodes.get(id);
   if (!node) return;
 
+  if (state.selectMode) {
+    toggleSelected(id);
+    return;
+  }
+
   if (state.view === 'trash') {
     toast('Restore this item to open it');
     return;
   }
 
   if (node.type === 'folder') {
+    exitSelectMode();
     state.view = 'drive';
     state.folderId = node.id;
     state.query = '';
@@ -751,6 +792,293 @@ function openNode(id) {
   }
 
   openPreview(node);
+}
+
+/* ------------------------------------------------------------------ */
+/* Multi-select and bulk actions                                      */
+/* ------------------------------------------------------------------ */
+
+function updateSelectionBar() {
+  const bar = $('#selection-bar');
+  if (!bar) return;
+
+  bar.classList.toggle('hidden', !state.selectMode);
+
+  const count = state.selected.size;
+  const countNode = $('#selection-count');
+  if (countNode) countNode.textContent = count === 1 ? '1 selected' : `${count} selected`;
+
+  const inTrash = state.view === 'trash';
+  const show = (selector, visible) => {
+    const node = $(selector);
+    if (node) node.classList.toggle('hidden', !visible);
+  };
+
+  show('#sel-star', !inTrash);
+  show('#sel-move', !inTrash);
+  show('#sel-download', !inTrash);
+  show('#sel-restore', inTrash);
+
+  const deleteButton = $('#sel-delete');
+  if (deleteButton) deleteButton.textContent = inTrash ? 'Delete forever' : 'Remove';
+}
+
+function exitSelectMode() {
+  state.selectMode = false;
+  state.selected.clear();
+  const button = $('#select-btn');
+  if (button) button.textContent = 'Select';
+  updateSelectionBar();
+}
+
+function toggleSelectMode() {
+  if (state.selectMode) {
+    exitSelectMode();
+    render();
+    return;
+  }
+
+  state.selectMode = true;
+  state.selected.clear();
+  const button = $('#select-btn');
+  if (button) button.textContent = 'Done';
+  render();
+}
+
+function toggleSelected(id) {
+  if (state.selected.has(id)) state.selected.delete(id);
+  else state.selected.add(id);
+  render();
+}
+
+function selectAllVisible() {
+  const items = currentItems();
+  if (state.selected.size === items.length) state.selected.clear();
+  else items.forEach((node) => state.selected.add(node.id));
+  render();
+}
+
+function pickFolderFor(ids) {
+  return new Promise((resolve) => {
+    const root = $('#dialog');
+    const blocked = new Set(ids);
+    for (const id of ids) {
+      const node = state.nodes.get(id);
+      if (node && node.type === 'folder') descendantIds(id).forEach((child) => blocked.add(child));
+    }
+
+    const folders = [...state.nodes.values()]
+      .filter((entry) => entry.type === 'folder' && !entry.trashed && !blocked.has(entry.id))
+      .sort((a, b) => collator.compare(a.name, b.name));
+
+    const rows = [
+      `<button class="picker-item" type="button" data-target="root">${icon('drive')}<span>My Drive</span></button>`,
+      ...folders.map(
+        (folder) =>
+          `<button class="picker-item" type="button" data-target="${folder.id}">${icon('folder')}<span>${escapeHtml(folder.name)}</span></button>`
+      ),
+    ];
+
+    root.innerHTML = `
+      <div class="dialog-backdrop" data-close="1"></div>
+      <div class="dialog" role="dialog" aria-modal="true">
+        <h2>Move ${ids.length} item${ids.length === 1 ? '' : 's'}</h2>
+        <div class="picker-list">${rows.join('')}</div>
+        <div class="dialog-actions">
+          <button class="btn ghost" type="button" data-action="cancel">Cancel</button>
+        </div>
+      </div>`;
+    root.classList.remove('hidden');
+
+    const close = (value) => {
+      root.classList.add('hidden');
+      root.innerHTML = '';
+      resolve(value);
+    };
+
+    root.querySelector('[data-close]').addEventListener('click', () => close(undefined));
+    root.querySelector('[data-action="cancel"]').addEventListener('click', () => close(undefined));
+    root.querySelectorAll('.picker-item').forEach((button) => {
+      button.addEventListener('click', () => {
+        close(button.dataset.target === 'root' ? null : button.dataset.target);
+      });
+    });
+  });
+}
+
+async function bulkDelete() {
+  const ids = [...state.selected];
+  if (!ids.length) {
+    toast('Nothing selected');
+    return;
+  }
+
+  const inTrash = state.view === 'trash';
+  const sure = await showDialog({
+    title: inTrash ? 'Delete forever?' : 'Remove items?',
+    message: inTrash
+      ? `Permanently delete ${ids.length} item${ids.length === 1 ? '' : 's'}?`
+      : `Move ${ids.length} item${ids.length === 1 ? '' : 's'} to trash?`,
+    confirmLabel: inTrash ? 'Delete forever' : 'Remove',
+    danger: true,
+  });
+  if (!sure) return;
+
+  if (inTrash) {
+    await removeForever(ids);
+  } else {
+    const now = Date.now();
+    for (const id of ids) {
+      const node = state.nodes.get(id);
+      if (!node) continue;
+      node.trashed = true;
+      node.trashedAt = now;
+      node.updatedAt = now;
+      await db.putNode(node);
+    }
+  }
+
+  exitSelectMode();
+  render();
+  toast(inTrash ? 'Deleted forever' : 'Moved to trash');
+}
+
+async function bulkRestore() {
+  const ids = [...state.selected];
+  if (!ids.length) {
+    toast('Nothing selected');
+    return;
+  }
+
+  const now = Date.now();
+  for (const id of ids) {
+    const node = state.nodes.get(id);
+    if (!node) continue;
+    if (node.parentId && !state.nodes.get(node.parentId)) node.parentId = null;
+    node.trashed = false;
+    node.trashedAt = null;
+    node.updatedAt = now;
+    await db.putNode(node);
+  }
+
+  exitSelectMode();
+  render();
+  toast(`Restored ${ids.length} item${ids.length === 1 ? '' : 's'}`);
+}
+
+async function bulkStar() {
+  const ids = [...state.selected];
+  if (!ids.length) {
+    toast('Nothing selected');
+    return;
+  }
+
+  const now = Date.now();
+  for (const id of ids) {
+    const node = state.nodes.get(id);
+    if (!node) continue;
+    node.starred = true;
+    node.updatedAt = now;
+    await db.putNode(node);
+  }
+
+  exitSelectMode();
+  render();
+  toast('Added to starred');
+}
+
+async function bulkMove() {
+  const ids = [...state.selected];
+  if (!ids.length) {
+    toast('Nothing selected');
+    return;
+  }
+
+  const target = await pickFolderFor(ids);
+  if (target === undefined) return;
+
+  const now = Date.now();
+  for (const id of ids) {
+    const node = state.nodes.get(id);
+    if (!node) continue;
+    if (node.parentId === target) continue;
+    node.parentId = target;
+    node.name = uniqueName(node.name, target, node.id);
+    node.updatedAt = now;
+    await db.putNode(node);
+  }
+
+  exitSelectMode();
+  render();
+  toast('Moved');
+}
+
+async function bulkDownload() {
+  const ids = [...state.selected];
+  const files = ids.map((id) => state.nodes.get(id)).filter((node) => node && node.type === 'file');
+  if (!files.length) {
+    toast('No files selected');
+    return;
+  }
+
+  for (const node of files) await downloadNode(node);
+  exitSelectMode();
+  render();
+}
+
+/* ------------------------------------------------------------------ */
+/* Details                                                             */
+/* ------------------------------------------------------------------ */
+
+function showDetailsDialog(node) {
+  const root = $('#dialog');
+
+  let location = 'My Drive';
+  if (node.parentId) {
+    const chain = [];
+    let cursor = node.parentId;
+    let guard = 0;
+    while (cursor && state.nodes.get(cursor) && guard < 64) {
+      const parent = state.nodes.get(cursor);
+      chain.unshift(parent.name);
+      cursor = parent.parentId;
+      guard += 1;
+    }
+    if (chain.length) location = `My Drive / ${chain.map((name) => escapeHtml(name)).join(' / ')}`;
+  }
+
+  let extra;
+  if (node.type === 'folder') {
+    const count = [...state.nodes.values()].filter((entry) => !entry.trashed && entry.parentId === node.id).length;
+    extra = `<div class="detail-row"><span>Contents</span><b>${count} item${count === 1 ? '' : 's'}</b></div>`;
+  } else {
+    extra = `<div class="detail-row"><span>Size</span><b>${formatBytes(node.size)}</b></div>`;
+  }
+
+  root.innerHTML = `
+    <div class="dialog-backdrop" data-close="1"></div>
+    <div class="dialog" role="dialog" aria-modal="true">
+      <h2>${escapeHtml(node.name)}</h2>
+      <div class="detail-list">
+        <div class="detail-row"><span>Type</span><b>${escapeHtml(node.type === 'folder' ? 'Folder' : node.mime || 'File')}</b></div>
+        ${extra}
+        <div class="detail-row"><span>Location</span><b>${location}</b></div>
+        <div class="detail-row"><span>Created</span><b>${escapeHtml(formatDateTime(node.createdAt))}</b></div>
+        <div class="detail-row"><span>Modified</span><b>${escapeHtml(formatDateTime(node.updatedAt))}</b></div>
+      </div>
+      <div class="dialog-actions">
+        <button class="btn primary" type="button" data-action="close">Close</button>
+      </div>
+    </div>`;
+  root.classList.remove('hidden');
+
+  const close = () => {
+    root.classList.add('hidden');
+    root.innerHTML = '';
+  };
+
+  root.querySelector('[data-close]').addEventListener('click', close);
+  root.querySelector('[data-action="close"]').addEventListener('click', close);
 }
 
 /* ------------------------------------------------------------------ */
@@ -769,6 +1097,11 @@ async function openPreview(node) {
   if (!modal) return;
 
   state.previewId = node.id;
+
+  const files = sortItems(currentItems()).filter((entry) => entry.type === 'file' && !entry.trashed);
+  state.previewIds = files.map((entry) => entry.id);
+  state.previewIndex = state.previewIds.indexOf(node.id);
+  updatePreviewNav();
   $('#preview-name').textContent = node.name;
   $('#preview-sub').textContent = `${formatBytes(node.size)} · ${formatDate(node.updatedAt)}`;
 
@@ -803,10 +1136,32 @@ async function openPreview(node) {
     body.innerHTML = `<audio class="preview-audio" src="${url}" controls></audio>`;
   } else if (kind === 'pdf') {
     body.innerHTML = `<iframe class="preview-frame" src="${url}" title="${escapeHtml(node.name)}"></iframe>`;
+  } else if (officeType(node.name)) {
+    // Word, Excel and PowerPoint (and OpenDocument) files are ZIPs of XML:
+    // office.js unpacks them and returns readable HTML.
+    try {
+      body.innerHTML = await renderOfficePreview(node.name, blob);
+    } catch (error) {
+      console.warn('Could not read document', node.name, error);
+      openLink.classList.add('hidden');
+      body.innerHTML = `
+        <div class="preview-fallback">
+          ${icon(iconForKind(kind))}
+          <p>This document could not be read in the browser.</p>
+          <p class="muted">${escapeHtml(error && error.message ? error.message : 'Unknown error')}</p>
+          <button class="btn primary" type="button" data-download="1">Download ${escapeHtml(node.name)}</button>
+        </div>`;
+      body.querySelector('[data-download]').addEventListener('click', () => downloadNode(node));
+    }
   } else if (isTextual(kind, node.mime, node.name)) {
     try {
       const text = await readText(blob);
-      body.innerHTML = `<pre class="preview-text">${escapeHtml(text)}</pre>`;
+      const extension = String(node.name).toLowerCase().split('.').pop();
+      if ((extension === 'csv' || extension === 'tsv') && text.length < 2000000) {
+        body.innerHTML = renderDelimited(text, extension === 'tsv' ? '\t' : ',');
+      } else {
+        body.innerHTML = `<pre class="preview-text">${escapeHtml(text)}</pre>`;
+      }
     } catch (error) {
       body.innerHTML = `<p class="muted">Could not read this file as text.</p>`;
     }
@@ -829,6 +1184,23 @@ function closePreview() {
   modal.classList.add('hidden');
   $('#preview-body').innerHTML = '';
   state.previewId = null;
+}
+
+function updatePreviewNav() {
+  const previous = $('#preview-prev');
+  const next = $('#preview-next');
+  const canPrevious = state.previewIndex > 0;
+  const canNext = state.previewIndex >= 0 && state.previewIndex < state.previewIds.length - 1;
+  if (previous) previous.disabled = !canPrevious;
+  if (next) next.disabled = !canNext;
+}
+
+function stepPreview(delta) {
+  if (!state.previewIds.length) return;
+  const index = state.previewIndex + delta;
+  if (index < 0 || index >= state.previewIds.length) return;
+  const node = state.nodes.get(state.previewIds[index]);
+  if (node) openPreview(node);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1081,6 +1453,7 @@ function bindUI() {
       state.query = '';
       $('#search-input').value = '';
       if (state.view === 'drive') state.folderId = null;
+      exitSelectMode();
       document.body.classList.remove('sidebar-open');
       closePopup();
       render();
@@ -1163,6 +1536,21 @@ function bindUI() {
 
   $('#empty-trash').addEventListener('click', emptyTrash);
 
+  $('#select-btn').addEventListener('click', toggleSelectMode);
+  $('#sel-all').addEventListener('click', selectAllVisible);
+  $('#sel-star').addEventListener('click', bulkStar);
+  $('#sel-move').addEventListener('click', bulkMove);
+  $('#sel-download').addEventListener('click', bulkDownload);
+  $('#sel-restore').addEventListener('click', bulkRestore);
+  $('#sel-delete').addEventListener('click', bulkDelete);
+  $('#sel-cancel').addEventListener('click', () => {
+    exitSelectMode();
+    render();
+  });
+
+  $('#preview-prev').addEventListener('click', () => stepPreview(-1));
+  $('#preview-next').addEventListener('click', () => stepPreview(1));
+
   $('#file-grid').addEventListener('click', (event) => {
     const menuButton = event.target.closest('[data-menu]');
     if (menuButton) {
@@ -1218,6 +1606,7 @@ function bindUI() {
     state.view = 'drive';
     state.query = '';
     $('#search-input').value = '';
+    exitSelectMode();
     render();
   });
 
@@ -1248,7 +1637,23 @@ function bindUI() {
     if (event.key === 'Escape') {
       closePopup();
       if (!$('#preview').classList.contains('hidden')) closePreview();
+      if (state.selectMode) {
+        exitSelectMode();
+        render();
+      }
       document.body.classList.remove('sidebar-open');
+      return;
+    }
+
+    if (!$('#preview').classList.contains('hidden')) {
+      if (event.key === 'ArrowRight') {
+        stepPreview(1);
+        return;
+      }
+      if (event.key === 'ArrowLeft') {
+        stepPreview(-1);
+        return;
+      }
     }
   });
 

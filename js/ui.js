@@ -32,6 +32,8 @@ const ICONS = {
   sun: '<path d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm0-5h-1v3h2V2h-1zm0 17h-1v3h2v-3h-1zM2 11h3v2H2v-2zm17 0h3v2h-3v-2zM4.9 3.5 3.5 4.9l2.1 2.1 1.4-1.4-2.1-2.1zm13.6 13.6-1.4 1.4 2.1 2.1 1.4-1.4-2.1-2.1zM19.1 3.5l-2.1 2.1 1.4 1.4 2.1-2.1-1.4-1.4zM6.5 18.1l-2.1 2.1 1.4 1.4 2.1-2.1-1.4-1.4z"/>',
   moon: '<path d="M12.3 2a9.9 9.9 0 0 0-1 19.7 10 10 0 0 1 1-19.7z"/>',
   plus: '<path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>',
+  info: '<path d="M11 7h2v2h-2V7zm0 4h2v6h-2v-6zm1-9a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16z"/>',
+  check: '<path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>',
   'folder-open': '<path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/>',
 };
 
@@ -69,6 +71,14 @@ export function formatBytes(bytes) {
 
 const dayFormat = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+const fullFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+
+export function formatDateTime(timestamp) {
+  if (!timestamp) return '—';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return '—';
+  return fullFormat.format(date);
+}
 
 export function formatDate(timestamp) {
   if (!timestamp) return '—';

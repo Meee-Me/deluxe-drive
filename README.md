@@ -11,8 +11,12 @@ Google: your files live in this browser's IndexedDB, behind a password you choos
 - **Folders and files** — upload any file type (single, multiple, whole folders), create folders,
   rename, move, star, delete to trash, restore, delete forever, empty trash.
 - **Views** — My Drive with breadcrumbs, Recent, Starred, Trash, and full-name search.
-- **Previews** — images, video, audio and PDF open inline; text, code, JSON, CSV and markdown are
-  shown as text; anything else offers a download.
+- **Previews** — images, video, audio and PDF open inline; Word (`.docx`), Excel (`.xlsx`),
+  PowerPoint (`.pptx`), OpenDocument (`.odt`, `.ods`, `.odp`) and Rich Text (`.rtf`) files are
+  unpacked and read in the browser, shown as text, tables and slides; CSV/TSV open as tables;
+  plain text and code are shown as text. Anything else offers a download.
+- **Select mode** — select several items and download, star, move or delete them together, plus
+  a details panel and next/previous navigation inside the preview.
 - **Grid and list layouts**, sorting by name / last modified / size, storage usage meter, light and
   dark themes, drag-and-drop upload, right-click / long-press menus.
 
@@ -25,6 +29,7 @@ It is a static site: open `index.html` over http(s) — for example the preview 
 index.html      markup for the lock screen and the app shell
 styles.css      all styling, including dark mode and mobile drawer
 js/app.js       app state, rendering, file actions, previews, uploads
+js/office.js    reads .docx / .xlsx / .pptx / .odt / .ods / .odp / .rtf in the browser
 js/db.js        IndexedDB layer (nodes / blobs / settings stores)
 js/auth.js      password hashing, unlock session
 js/ui.js        icons, formatting, toasts, modal dialogs

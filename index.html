@@ -112,6 +112,7 @@
           <div id="crumbs" class="crumbs"></div>
           <div class="toolbar-actions">
             <button id="empty-trash" class="btn ghost hidden" type="button">Empty trash</button>
+            <button id="select-btn" class="btn ghost" type="button">Select</button>
             <select id="sort-select" class="select" aria-label="Sort by">
               <option value="name">Name</option>
               <option value="modified">Last modified</option>
@@ -143,6 +144,21 @@
     <input id="file-input" type="file" multiple hidden />
     <input id="folder-input" type="file" webkitdirectory directory multiple hidden />
 
+    <div id="selection-bar" class="selection-bar hidden">
+      <span id="selection-count" class="selection-count">0 selected</span>
+      <div class="selection-actions">
+        <button id="sel-all" class="btn ghost" type="button">All</button>
+        <button id="sel-star" class="btn ghost" type="button">Star</button>
+        <button id="sel-move" class="btn ghost" type="button">Move</button>
+        <button id="sel-download" class="btn ghost" type="button">Download</button>
+        <button id="sel-restore" class="btn ghost hidden" type="button">Restore</button>
+        <button id="sel-delete" class="btn danger" type="button">Remove</button>
+        <button id="sel-cancel" class="icon-btn" type="button" aria-label="Cancel selection">
+          <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>
+        </button>
+      </div>
+    </div>
+
     <div id="context-menu" class="popup hidden" role="menu"></div>
     <div id="dialog" class="dialog-root hidden"></div>
     <div id="toasts" class="toasts" aria-live="polite"></div>
@@ -156,6 +172,12 @@
             <span id="preview-sub"></span>
           </div>
           <div class="preview-actions">
+            <button id="preview-prev" class="icon-btn" type="button" aria-label="Previous file">
+              <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" /></svg>
+            </button>
+            <button id="preview-next" class="icon-btn" type="button" aria-label="Next file">
+              <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" /></svg>
+            </button>
             <a id="preview-open" class="btn ghost" target="_blank" rel="noopener">Open in tab</a>
             <button id="preview-download" class="btn primary" type="button">Download</button>
             <button id="preview-close" class="icon-btn" type="button" aria-label="Close preview">
@@ -252,6 +274,6 @@
   </script>
 
   <!-- The ?v= query busts a stale cached copy of the module between deploys. -->
-  <script type="module" src="js/app.js?v=7"></script>
+  <script type="module" src="js/app.js?v=8"></script>
 </body>
 </html>

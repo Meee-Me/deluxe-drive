@@ -1340,3 +1340,99 @@ button {
     font-size: 17px;
   }
 }
+
+
+/* ---------------- Document previews (docx / xlsx / pptx) ---------------- */
+
+.preview-doc {
+  width: 100%;
+  height: 100%;
+  align-self: stretch;
+  overflow: auto;
+  padding: 18px 20px;
+  border-radius: 10px;
+  background: var(--surface);
+  text-align: left;
+}
+
+.office-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.office-doc {
+  max-width: 780px;
+  margin: 0 auto;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.office-doc p {
+  margin: 0 0 12px;
+}
+
+.office-gap {
+  margin: 0 0 6px;
+}
+
+.office-sheet {
+  min-width: 0;
+}
+
+.office-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.office-table {
+  border-collapse: collapse;
+  font-size: 12.5px;
+  min-width: 100%;
+}
+
+.office-table td {
+  border: 1px solid var(--border);
+  padding: 5px 9px;
+  vertical-align: top;
+  white-space: pre-wrap;
+  max-width: 320px;
+}
+
+.office-table tr:first-child td {
+  font-weight: 600;
+  background: var(--surface-2);
+}
+
+.office-sheet-name {
+  margin: 0 0 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.office-slide {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: var(--surface);
+}
+
+.office-slide h3 {
+  margin: 0 0 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.office-slide p {
+  margin: 0 0 8px;
+  line-height: 1.55;
+}
+
+.office-slide p:first-of-type {
+  font-size: 16px;
+  font-weight: 600;
+}

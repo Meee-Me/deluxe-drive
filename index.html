@@ -171,48 +171,87 @@
   <div id="boot-fallback" class="boot-error hidden">
     <h1>Deluxe Drive</h1>
     <p id="boot-fallback-text">The app did not start. This is almost always an old cached copy of the page.</p>
-    <p id="boot-fallback-detail" class="boot-detail"></p>
-    <button id="boot-reload" class="btn primary" type="button">Load the latest version</button>
-    <a class="btn ghost" href="check.html" style="text-decoration: none">Run a device check</a>
+    <pre id="boot-fallback-detail" class="boot-detail"></pre>
+    <div class="boot-actions">
+      <button id="boot-reload" class="btn primary" type="button">Load the latest version</button>
+      <button id="boot-copy" class="btn ghost" type="button">Copy details</button>
+      <button id="boot-reset-db" class="btn ghost" type="button">Reset local data</button>
+      <a class="btn ghost" href="check.html" style="text-decoration: none">Device check</a>
+    </div>
   </div>
 
   <!-- Plain (non-module) guard: if the module below never starts, say so
-       instead of leaving a blank screen, and offer a cache-busting reload. -->
+       instead of leaving a blank screen, and offer the repairs that work
+       without any JavaScript from the app itself. -->
   <script>
     (function () {
-      function panel() {
-        return document.getElementById('boot-fallback');
-      }
       function show(text, detail) {
         if (window.__deluxeDriveStarted) return;
-        var box = panel();
+        var box = document.getElementById('boot-fallback');
         if (!box) return;
         if (text) document.getElementById('boot-fallback-text').textContent = text;
-        var detailNode = document.getElementById('boot-fallback-detail');
-        if (detailNode && detail) detailNode.textContent = detail;
+        if (detail) document.getElementById('boot-fallback-detail').textContent = detail;
         box.classList.remove('hidden');
       }
+
       window.addEventListener('error', function (event) {
         var message = event && event.message ? event.message : 'A script failed to load.';
-        show('Deluxe Drive hit an error while starting.', message);
+        show('Deluxe Drive could not start on this device.', message);
       });
+
       window.addEventListener('unhandledrejection', function (event) {
         var reason = event && event.reason;
         var message = reason && reason.message ? reason.message : String(reason || 'Unknown error');
-        show('Deluxe Drive hit an error while starting.', message);
+        show('Deluxe Drive could not start on this device.', message);
       });
+
       setTimeout(function () {
         show('The app did not start. This is almost always an old cached copy of the page.', '');
-      }, 4000);
+      }, 5000);
+
       document.addEventListener('click', function (event) {
-        if (event.target && event.target.id === 'boot-reload') {
+        var target = event.target;
+        if (!target || !target.id) return;
+
+        if (target.id === 'boot-reload') {
           location.href = location.pathname + '?v=' + Date.now();
+          return;
+        }
+
+        if (target.id === 'boot-copy') {
+          var detail = document.getElementById('boot-fallback-detail');
+          var text = (detail ? detail.textContent : '') || window.__deluxeDriveLastError || 'no details';
+          var done = function () { target.textContent = 'Copied'; };
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(done, function () {});
+          }
+          return;
+        }
+
+        if (target.id === 'boot-reset-db') {
+          var sure = confirm(
+            'Reset deletes every file, folder and your password that this browser stored for Deluxe Drive. Continue?'
+          );
+          if (!sure) return;
+
+          var reload = function () {
+            location.href = location.pathname + '?v=' + Date.now();
+          };
+
+          try {
+            var request = indexedDB.deleteDatabase('deluxe-drive');
+            request.onsuccess = reload;
+            request.onerror = reload;
+            request.onblocked = reload;
+          } catch (error) {
+            reload();
+          }
         }
       });
     })();
   </script>
 
   <!-- The ?v= query busts a stale cached copy of the module between deploys. -->
-  <script type="module" src="js/app.js?v=4"></script>
+  <script type="module" src="js/app.js?v=5"></script>
 </body>
 </html>

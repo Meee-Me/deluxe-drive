@@ -5,20 +5,48 @@ import { icon, escapeHtml, formatBytes, formatDate, showDialog, toast } from './
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 6';
+const BUILD = 'build 7';
 
-// Tells the guard in index.html that the app really started, so a working
-// app never shows its "did not start" panel.
+// Tells the lock-screen fallback in index.html that the app really started.
 window.__deluxeDriveStarted = true;
+window.__deluxeDriveBuild = BUILD;
 
-// The guard panel in index.html may have appeared while a slow network was
-// still loading this file; hide it now that the app is alive.
 const bootFallback = document.getElementById('boot-fallback');
+const bootFallbackText = document.getElementById('boot-fallback-text');
+const bootFallbackDetail = document.getElementById('boot-fallback-detail');
 if (bootFallback) bootFallback.classList.add('hidden');
 
 /* ------------------------------------------------------------------ */
 /* Crash reporting: never fail silently                               */
 /* ------------------------------------------------------------------ */
+
+function describeError(error) {
+  if (!error) return 'Unknown error';
+  if (typeof error === 'string') return error;
+  const name = error.name || 'Error';
+  const message = error.message || String(error);
+  return `${name}: ${message}`;
+}
+
+function showBootFailure(stage, error) {
+  const lines = [BUILD];
+  if (stage) lines.push(`Failed while ${stage}`);
+  lines.push(describeError(error));
+  if (error && typeof error === 'object' && error.stack) lines.push('', String(error.stack));
+
+  const text = lines.join('\n');
+  window.__deluxeDriveLastError = text;
+  console.error('Deluxe Drive could not start:', stage, error);
+
+  if (bootFallback) {
+    if (bootFallbackText) bootFallbackText.textContent = 'Deluxe Drive could not start on this device.';
+    if (bootFallbackDetail) bootFallbackDetail.textContent = text;
+    bootFallback.classList.remove('hidden');
+    return;
+  }
+
+  document.body.innerHTML = `<div class="boot-error"><h1>Deluxe Drive</h1><p>${escapeHtml(text)}</p></div>`;
+}
 
 function reportCrash(message) {
   console.error('Deluxe Drive error:', message);
@@ -31,23 +59,18 @@ function reportCrash(message) {
     return;
   }
 
-  const box = document.getElementById('boot-fallback');
-  const text = document.getElementById('boot-fallback-text');
-  const detail = document.getElementById('boot-fallback-detail');
-  if (box && text) {
-    text.textContent = 'Deluxe Drive hit an error while starting.';
-    if (detail) detail.textContent = message;
-    box.classList.remove('hidden');
-  }
+  showBootFailure('', message);
 }
 
+// A real script error targets the window; a resource error (e.g. a missing
+// image) targets the element, and is not something to alarm the user about.
 window.addEventListener('error', (event) => {
+  if (event && event.target && event.target !== window) return;
   reportCrash((event && event.message) || 'Unknown script error');
 });
 
 window.addEventListener('unhandledrejection', (event) => {
-  const reason = event && event.reason;
-  reportCrash(reason && reason.message ? reason.message : String(reason || 'Unknown error'));
+  reportCrash(describeError(event && event.reason));
 });
 
 const $ = (selector) => document.querySelector(selector);
@@ -1314,27 +1337,36 @@ function bindAuthScreen() {
 }
 
 async function boot() {
+  // Each step is named, so a failure says where it stopped instead of
+  // surfacing the browser's unhelpful "Script error".
+  let stage = 'opening the drive database';
+
   try {
     await openDB();
-  } catch (error) {
-    document.body.innerHTML = `<div class="boot-error"><h1>Deluxe Drive</h1><p>${escapeHtml(
-      error.message || 'Could not open the drive database.'
-    )}</p></div>`;
-    return;
-  }
 
-  bindAuthScreen();
+    stage = 'setting up the password screen';
+    bindAuthScreen();
 
-  try {
-    if (await auth.tryRestore()) {
+    stage = 'checking whether this device is unlocked';
+    let unlocked = false;
+    try {
+      unlocked = await auth.tryRestore();
+    } catch (error) {
+      console.warn('Could not restore the remembered unlock', error);
+      unlocked = false;
+    }
+
+    if (unlocked) {
+      stage = 'opening your drive';
       await enterApp();
       return;
     }
-  } catch (_) {
-    /* fall through to the lock screen */
-  }
 
-  await initAuthScreen();
+    stage = 'reading the saved password';
+    await initAuthScreen();
+  } catch (error) {
+    showBootFailure(stage, error);
+  }
 }
 
 boot();

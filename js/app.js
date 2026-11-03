@@ -2,6 +2,49 @@ import { db, openDB } from './db.js';
 import * as auth from './auth.js';
 import { icon, escapeHtml, formatBytes, formatDate, showDialog, toast } from './ui.js';
 
+// Tells the guard in index.html that the app really started, so a working
+// app never shows its "did not start" panel.
+window.__deluxeDriveStarted = true;
+
+// The guard panel in index.html may have appeared while a slow network was
+// still loading this file; hide it now that the app is alive.
+const bootFallback = document.getElementById('boot-fallback');
+if (bootFallback) bootFallback.classList.add('hidden');
+
+/* ------------------------------------------------------------------ */
+/* Crash reporting: never fail silently                               */
+/* ------------------------------------------------------------------ */
+
+function reportCrash(message) {
+  console.error('Deluxe Drive error:', message);
+
+  const app = document.getElementById('app');
+  const unlocked = app && !app.classList.contains('hidden');
+
+  if (unlocked) {
+    toast(`Something went wrong: ${message}`);
+    return;
+  }
+
+  const box = document.getElementById('boot-fallback');
+  const text = document.getElementById('boot-fallback-text');
+  const detail = document.getElementById('boot-fallback-detail');
+  if (box && text) {
+    text.textContent = 'Deluxe Drive hit an error while starting.';
+    if (detail) detail.textContent = message;
+    box.classList.remove('hidden');
+  }
+}
+
+window.addEventListener('error', (event) => {
+  reportCrash((event && event.message) || 'Unknown script error');
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event && event.reason;
+  reportCrash(reason && reason.message ? reason.message : String(reason || 'Unknown error'));
+});
+
 const $ = (selector) => document.querySelector(selector);
 
 const state = {

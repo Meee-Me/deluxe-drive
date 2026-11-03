@@ -162,7 +162,50 @@
     </div>
   </div>
 
+  <div id="boot-fallback" class="boot-error hidden">
+    <h1>Deluxe Drive</h1>
+    <p id="boot-fallback-text">The app did not start. This is almost always an old cached copy of the page.</p>
+    <p id="boot-fallback-detail" class="boot-detail"></p>
+    <button id="boot-reload" class="btn primary" type="button">Load the latest version</button>
+  </div>
+
+  <!-- Plain (non-module) guard: if the module below never starts, say so
+       instead of leaving a blank screen, and offer a cache-busting reload. -->
+  <script>
+    (function () {
+      function panel() {
+        return document.getElementById('boot-fallback');
+      }
+      function show(text, detail) {
+        if (window.__deluxeDriveStarted) return;
+        var box = panel();
+        if (!box) return;
+        if (text) document.getElementById('boot-fallback-text').textContent = text;
+        var detailNode = document.getElementById('boot-fallback-detail');
+        if (detailNode && detail) detailNode.textContent = detail;
+        box.classList.remove('hidden');
+      }
+      window.addEventListener('error', function (event) {
+        var message = event && event.message ? event.message : 'A script failed to load.';
+        show('Deluxe Drive hit an error while starting.', message);
+      });
+      window.addEventListener('unhandledrejection', function (event) {
+        var reason = event && event.reason;
+        var message = reason && reason.message ? reason.message : String(reason || 'Unknown error');
+        show('Deluxe Drive hit an error while starting.', message);
+      });
+      setTimeout(function () {
+        show('The app did not start. This is almost always an old cached copy of the page.', '');
+      }, 4000);
+      document.addEventListener('click', function (event) {
+        if (event.target && event.target.id === 'boot-reload') {
+          location.href = location.pathname + '?v=' + Date.now();
+        }
+      });
+    })();
+  </script>
+
   <!-- The ?v= query busts a stale cached copy of the module between deploys. -->
-  <script type="module" src="js/app.js?v=2"></script>
+  <script type="module" src="js/app.js?v=3"></script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-import * as db from './db.js';
+import { db, openDB } from './db.js';
 import * as auth from './auth.js';
 import { icon, escapeHtml, formatBytes, formatDate, showDialog, toast } from './ui.js';
 
@@ -1159,8 +1159,19 @@ function bindUI() {
 async function enterApp() {
   $('#auth').classList.add('hidden');
   $('#app').classList.remove('hidden');
-  await loadNodes();
+
+  // Wire the UI first, so a storage hiccup can never leave the app with
+  // dead buttons: the user still gets a working (empty) drive plus a toast.
   bindUI();
+
+  try {
+    await loadNodes();
+  } catch (error) {
+    console.error('Could not read the drive', error);
+    state.nodes = new Map();
+    toast(error.message || 'Could not read the drive');
+  }
+
   render();
 }
 
@@ -1242,7 +1253,7 @@ function bindAuthScreen() {
 
 async function boot() {
   try {
-    await db.openDB();
+    await openDB();
   } catch (error) {
     document.body.innerHTML = `<div class="boot-error"><h1>Deluxe Drive</h1><p>${escapeHtml(
       error.message || 'Could not open the drive database.'

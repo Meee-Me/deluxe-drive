@@ -5,7 +5,7 @@ import { icon, escapeHtml, formatBytes, formatDate, showDialog, toast } from './
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 8';
+const BUILD = 'build 9';
 
 // Tells the lock-screen fallback in index.html that the app really started.
 window.__deluxeDriveStarted = true;
@@ -888,13 +888,20 @@ async function ensureFolder(name, parentId) {
 }
 
 async function handleUpload(fileList) {
+  // Snapshot the list: resetting an <input type="file"> empties its live
+  // FileList, so anything read later would come back empty.
   const files = Array.from(fileList || []);
-  if (!files.length) return;
+  if (!files.length) {
+    toast('No files were selected');
+    return;
+  }
 
   const targetParent = state.view === 'drive' ? state.folderId : null;
   toast(`Uploading ${files.length} file${files.length === 1 ? '' : 's'}…`);
 
-  let count = 0;
+  let added = 0;
+  let failed = 0;
+
   for (const file of files) {
     let parentId = targetParent;
     const relative = file.webkitRelativePath || '';
@@ -906,14 +913,26 @@ async function handleUpload(fileList) {
     }
     try {
       await saveFile(file, parentId);
-      count += 1;
+      added += 1;
     } catch (error) {
+      failed += 1;
       console.error('Upload failed', file.name, error);
+      const message = String((error && error.message) || '').toLowerCase();
+      if ((error && error.name === 'QuotaExceededError') || message.includes('quota')) {
+        toast('This browser is out of storage for that file');
+      }
     }
   }
 
   render();
-  toast(`${count} file${count === 1 ? '' : 's'} uploaded`);
+
+  if (added && !failed) {
+    toast(`${added} file${added === 1 ? '' : 's'} added`);
+  } else if (added && failed) {
+    toast(`${added} added, ${failed} could not be saved`);
+  } else {
+    toast('Nothing could be added — this browser refused to store the file');
+  }
 }
 
 async function createFolderFlow() {
@@ -1097,15 +1116,17 @@ function bindUI() {
   $('#empty-upload').addEventListener('click', openPicker);
 
   $('#file-input').addEventListener('change', async (event) => {
-    const files = event.target.files;
+    // Snapshot the selection BEFORE resetting the input: setting value = ''
+    // empties the live FileList, so uploading it afterwards finds nothing.
+    const chosen = Array.from(event.target.files || []);
     event.target.value = '';
-    await handleUpload(files);
+    await handleUpload(chosen);
   });
 
   $('#folder-input').addEventListener('change', async (event) => {
-    const files = event.target.files;
+    const chosen = Array.from(event.target.files || []);
     event.target.value = '';
-    await handleUpload(files);
+    await handleUpload(chosen);
   });
 
   $('#new-btn').addEventListener('click', (event) => {

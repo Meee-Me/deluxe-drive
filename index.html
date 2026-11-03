@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#1a73e8" />
+  <meta name="description" content="Deluxe Drive — your own password-protected drive in the browser." />
+  <title>Deluxe Drive</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%231a73e8' d='M8.4 2.6 1 15.4h7.1l7.4-12.8z'/><path fill='%231e8e3e' d='M22.9 15.4 19.3 9H8.1l3.6 6.4z'/><path fill='%23f9ab00' d='M1 15.4 4.6 21.6h14.8l3.5-6.2z'/></svg>" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Lock screen -->
+  <div id="auth" class="auth">
+    <form id="auth-form" class="auth-card" autocomplete="off">
+      <div class="auth-logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24">
+          <path fill="#1a73e8" d="M8.4 2.6 1 15.4h7.1l7.4-12.8z" />
+          <path fill="#1e8e3e" d="M22.9 15.4 19.3 9H8.1l3.6 6.4z" />
+          <path fill="#f9ab00" d="M1 15.4 4.6 21.6h14.8l3.5-6.2z" />
+        </svg>
+      </div>
+      <h1>Deluxe Drive</h1>
+      <p id="auth-sub" class="auth-sub">Enter your password to unlock your drive.</p>
+
+      <label class="field">
+        <span>Password</span>
+        <input id="auth-password" type="password" autocomplete="current-password" required />
+      </label>
+
+      <label class="field hidden" id="pw2-field">
+        <span>Confirm password</span>
+        <input id="auth-password2" type="password" autocomplete="new-password" />
+      </label>
+
+      <label class="check">
+        <input id="auth-remember" type="checkbox" checked />
+        <span>Keep me unlocked on this device</span>
+      </label>
+
+      <p id="auth-error" class="auth-error" role="alert"></p>
+
+      <button id="auth-submit" class="btn primary block" type="submit">Unlock</button>
+      <button id="auth-reset" class="link hidden" type="button">Forgot password? Erase this drive</button>
+    </form>
+  </div>
+
+  <!-- App -->
+  <div id="app" class="app hidden">
+    <header class="topbar">
+      <button id="menu-btn" class="icon-btn" type="button" aria-label="Open menu">
+        <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z" /></svg>
+      </button>
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="#1a73e8" d="M8.4 2.6 1 15.4h7.1l7.4-12.8z" />
+          <path fill="#1e8e3e" d="M22.9 15.4 19.3 9H8.1l3.6 6.4z" />
+          <path fill="#f9ab00" d="M1 15.4 4.6 21.6h14.8l3.5-6.2z" />
+        </svg>
+        <span>Deluxe Drive</span>
+      </div>
+      <div class="search">
+        <svg class="ico search-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z" /></svg>
+        <input id="search-input" type="search" placeholder="Search in Deluxe Drive" aria-label="Search files" autocomplete="off" />
+      </div>
+      <button id="theme-btn" class="icon-btn" type="button" aria-label="Toggle theme"></button>
+      <button id="account-btn" class="avatar" type="button" aria-label="Account menu">D</button>
+    </header>
+
+    <div class="shell">
+      <aside id="sidebar" class="sidebar">
+        <button id="new-btn" class="btn primary new-btn" type="button">
+          <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" /></svg>
+          <span>New</span>
+        </button>
+
+        <nav class="nav">
+          <button class="nav-item active" type="button" data-view="drive">
+            <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8.4 2.6 1 15.4h7.1l7.4-12.8z" /><path d="M22.9 15.4 19.3 9H8.1l3.6 6.4z" /><path d="M1 15.4 4.6 21.6h14.8l3.5-6.2z" /></svg>
+            <span>My Drive</span>
+          </button>
+          <button class="nav-item" type="button" data-view="recent">
+            <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z" /></svg>
+            <span>Recent</span>
+          </button>
+          <button class="nav-item" type="button" data-view="starred">
+            <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 17.27 18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" /></svg>
+            <span>Starred</span>
+          </button>
+          <button class="nav-item" type="button" data-view="trash">
+            <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" /></svg>
+            <span>Trash</span>
+          </button>
+        </nav>
+
+        <div class="storage">
+          <div class="storage-bar"><span id="storage-fill"></span></div>
+          <p id="storage-text">0 B used</p>
+        </div>
+      </aside>
+
+      <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
+
+      <main class="main">
+        <div class="toolbar">
+          <div id="crumbs" class="crumbs"></div>
+          <div class="toolbar-actions">
+            <button id="empty-trash" class="btn ghost hidden" type="button">Empty trash</button>
+            <select id="sort-select" class="select" aria-label="Sort by">
+              <option value="name">Name</option>
+              <option value="modified">Last modified</option>
+              <option value="size">Size</option>
+            </select>
+            <button id="view-toggle" class="icon-btn" type="button" aria-label="Toggle layout"></button>
+            <button id="upload-btn" class="btn primary" type="button">
+              <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z" /></svg>
+              <span>Upload</span>
+            </button>
+          </div>
+        </div>
+
+        <div id="file-grid" class="file-grid"></div>
+
+        <div id="empty" class="empty">
+          <div id="empty-icon" class="empty-icon"></div>
+          <h2 id="empty-title">No files yet</h2>
+          <p id="empty-text">Upload files or create a folder to get started.</p>
+          <button id="empty-upload" class="btn primary" type="button">Upload files</button>
+        </div>
+
+        <div id="drop-overlay" class="drop-overlay hidden">
+          <div class="drop-box">Drop files to upload</div>
+        </div>
+      </main>
+    </div>
+
+    <input id="file-input" type="file" multiple hidden />
+    <input id="folder-input" type="file" webkitdirectory directory multiple hidden />
+
+    <div id="context-menu" class="popup hidden" role="menu"></div>
+    <div id="dialog" class="dialog-root hidden"></div>
+    <div id="toasts" class="toasts" aria-live="polite"></div>
+
+    <div id="preview" class="preview hidden">
+      <div class="preview-backdrop" data-preview-close="1"></div>
+      <div class="preview-panel" role="dialog" aria-modal="true">
+        <header class="preview-head">
+          <div class="preview-title">
+            <p id="preview-name"></p>
+            <span id="preview-sub"></span>
+          </div>
+          <div class="preview-actions">
+            <a id="preview-open" class="btn ghost" target="_blank" rel="noopener">Open in tab</a>
+            <button id="preview-download" class="btn primary" type="button">Download</button>
+            <button id="preview-close" class="icon-btn" type="button" aria-label="Close preview">
+              <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>
+            </button>
+          </div>
+        </header>
+        <div id="preview-body" class="preview-body"></div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

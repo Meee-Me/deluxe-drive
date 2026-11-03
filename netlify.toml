@@ -1,0 +1,11 @@
+# Deluxe Drive is a plain static site: there is no build step, so Netlify
+# publishes the repository root as it is (index.html, styles.css, js/).
+[build]
+  publish = "."
+
+# Revalidate on every visit so a fresh deploy is picked up straight away
+# instead of the browser reusing an old cached app.js.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"

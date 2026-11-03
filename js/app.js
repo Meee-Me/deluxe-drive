@@ -5,7 +5,7 @@ import { icon, escapeHtml, formatBytes, formatDate, showDialog, toast } from './
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 7';
+const BUILD = 'build 8';
 
 // Tells the lock-screen fallback in index.html that the app really started.
 window.__deluxeDriveStarted = true;
@@ -62,15 +62,52 @@ function reportCrash(message) {
   showBootFailure('', message);
 }
 
+// Only errors raised by this app's own files are worth showing to the user.
+// Browser extensions (crypto wallets inject `window.ethereum`, for example)
+// throw constantly on every page, and catching those made the app look broken.
+const OUR_SCRIPTS = ['/js/app.js', '/js/db.js', '/js/auth.js', '/js/ui.js'];
+
+function fromThisApp(text) {
+  const value = String(text || '');
+  return OUR_SCRIPTS.some((path) => value.includes(path));
+}
+
+function fromAnotherProgram(text) {
+  const value = String(text || '');
+  return (
+    value.includes('ethereum') ||
+    value.includes('chrome-extension:') ||
+    value.includes('safari-web-extension:') ||
+    value.includes('moz-extension:') ||
+    value.includes('extension://') ||
+    value.includes('injectedScript')
+  );
+}
+
 // A real script error targets the window; a resource error (e.g. a missing
 // image) targets the element, and is not something to alarm the user about.
 window.addEventListener('error', (event) => {
-  if (event && event.target && event.target !== window) return;
-  reportCrash((event && event.message) || 'Unknown script error');
+  if (!event || (event.target && event.target !== window)) return;
+
+  const filename = String(event.filename || '');
+  const message = String(event.message || '');
+  const combined = `${filename} ${message}`;
+
+  if (fromAnotherProgram(combined)) return;
+  if (!fromThisApp(filename)) return;
+  if (!message || message === 'Script error.') return;
+
+  reportCrash(message);
 });
 
 window.addEventListener('unhandledrejection', (event) => {
-  reportCrash(describeError(event && event.reason));
+  const reason = event && event.reason;
+  const text = reason && reason.stack ? String(reason.stack) : String(reason || '');
+
+  if (fromAnotherProgram(text)) return;
+  if (!fromThisApp(text)) return;
+
+  reportCrash(describeError(reason));
 });
 
 const $ = (selector) => document.querySelector(selector);

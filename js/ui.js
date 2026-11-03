@@ -79,12 +79,29 @@ export function formatDate(timestamp) {
   return dayFormat.format(date);
 }
 
+let lastToastMessage = '';
+let lastToastAt = 0;
+
 export function toast(message) {
+  const text = String(message === undefined || message === null ? '' : message);
+
+  // Repeating the same message in quick succession (a polling script, a
+  // flapping error) must not fill the screen with identical toasts.
+  const now = Date.now();
+  if (text === lastToastMessage && now - lastToastAt < 2000) return;
+  lastToastMessage = text;
+  lastToastAt = now;
+
   const root = document.getElementById('toasts');
   if (!root) return;
+
+  while (root.children.length >= 3) {
+    root.firstElementChild.remove();
+  }
+
   const element = document.createElement('div');
   element.className = 'toast';
-  element.textContent = message;
+  element.textContent = text;
   root.appendChild(element);
   setTimeout(() => element.classList.add('out'), 2600);
   setTimeout(() => element.remove(), 3200);

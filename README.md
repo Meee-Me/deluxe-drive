@@ -18,9 +18,10 @@ Google: your files live in this browser's IndexedDB, behind a password you choos
   it). Word (`.docx`) is laid out as real pages with the vendored `docx-preview` library — tables,
   images, headings and fonts intact; Excel (`.xlsx`), OpenDocument (`.odt`, `.ods`, `.odp`) and
   Rich Text (`.rtf`) are read in the browser, spreadsheets with column letters, row numbers and
-  sticky headers; PowerPoint (`.pptx`) opens as a slide deck at the deck's own aspect ratio with a
-  slide counter; CSV/TSV open as tables; plain text and code are shown as text. Anything else
-  offers a download.
+  sticky headers; PowerPoint (`.pptx`) is drawn from its own slide XML — positioned text boxes with
+  the deck's font sizes and colours, images, solid fills and tables, on a canvas at the deck's exact
+  aspect ratio; CSV/TSV open as tables; plain text and code are shown as text. Anything else offers
+  a download.
 - **Select mode** — select several items and download, star, move or delete them together, plus
   a details panel and next/previous navigation inside the preview.
 - **Grid and list layouts**, sorting by name / last modified / size, storage usage meter, light and

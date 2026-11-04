@@ -379,7 +379,293 @@ async function presentationRatio(archive) {
   return width / height;
 }
 
+/* ------------------------------------------------------------------ */
+/* PowerPoint: draw the slide's real shapes                            */
+/* ------------------------------------------------------------------ */
+
+const EMU_PER_INCH = 914400;
+
+function percentOf(value, total) {
+  if (!total) return 0;
+  return Math.max(-50, Math.min(150, (Number(value || 0) / Number(total)) * 100));
+}
+
+function imageMime(path) {
+  const ext = extensionOf(path);
+  if (ext === 'png') return 'image/png';
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'gif') return 'image/gif';
+  if (ext === 'svg') return 'image/svg+xml';
+  if (ext === 'bmp') return 'image/bmp';
+  if (ext === 'tif' || ext === 'tiff') return 'image/tiff';
+  return '';
+}
+
+async function readRelationships(archive, partPath) {
+  const slash = partPath.lastIndexOf('/');
+  const dir = partPath.slice(0, slash + 1);
+  const name = partPath.slice(slash + 1);
+  const bytes = await readEntry(archive, `${dir}_rels/${name}.rels`);
+  const map = new Map();
+  if (!bytes) return map;
+
+  const doc = parseXml(bytes);
+  const nodes = doc.getElementsByTagName('Relationship');
+  for (let index = 0; index < nodes.length; index += 1) {
+    const id = nodes[index].getAttribute('Id');
+    const target = nodes[index].getAttribute('Target');
+    if (!id || !target) continue;
+    const resolved = target.startsWith('/') ? target.slice(1) : `${dir}${target}`;
+    map.set(id, resolved.replace(/\/\.\//g, '/'));
+  }
+  return map;
+}
+
+async function themeColours(archive) {
+  const colours = {
+    dk1: '#000000',
+    lt1: '#ffffff',
+    dk2: '#44546a',
+    lt2: '#e7e6e6',
+    accent1: '#4472c4',
+    accent2: '#ed7d31',
+    accent3: '#a5a5a5',
+    accent4: '#ffc000',
+    accent5: '#5b9bd5',
+    accent6: '#70ad47',
+    hlink: '#0563c1',
+    folHlink: '#954f72',
+  };
+
+  const bytes = await readEntry(archive, 'ppt/theme/theme1.xml');
+  if (!bytes) return colours;
+
+  const doc = parseXml(bytes);
+  const scheme = doc.getElementsByTagName('a:clrScheme')[0];
+  if (!scheme) return colours;
+
+  for (const slot of Array.from(scheme.children)) {
+    const srgb = slot.getElementsByTagName('a:srgbClr')[0];
+    const sys = slot.getElementsByTagName('a:sysClr')[0];
+    const hex = srgb ? srgb.getAttribute('val') : sys ? sys.getAttribute('lastClr') : '';
+    if (hex) colours[slot.localName] = `#${hex}`;
+  }
+  return colours;
+}
+
+function colourFrom(node, theme) {
+  if (!node) return '';
+  const solid = node.getElementsByTagName('a:solidFill')[0];
+  if (!solid) return '';
+
+  const srgb = solid.getElementsByTagName('a:srgbClr')[0];
+  if (srgb && srgb.getAttribute('val')) return `#${srgb.getAttribute('val')}`;
+
+  const scheme = solid.getElementsByTagName('a:schemeClr')[0];
+  if (scheme) {
+    const name = scheme.getAttribute('val');
+    if (theme[name]) return theme[name];
+    if (name === 'tx1') return theme.dk1;
+    if (name === 'bg1') return theme.lt1;
+    if (name === 'tx2') return theme.dk2;
+    if (name === 'bg2') return theme.lt2;
+  }
+  return '';
+}
+
+function shapeGeometry(element) {
+  const transform = element.getElementsByTagName('a:xfrm')[0];
+  if (!transform) return null;
+  const offset = transform.getElementsByTagName('a:off')[0];
+  const extent = transform.getElementsByTagName('a:ext')[0];
+  if (!offset || !extent) return null;
+  return {
+    x: Number(offset.getAttribute('x') || 0),
+    y: Number(offset.getAttribute('y') || 0),
+    width: Number(extent.getAttribute('cx') || 0),
+    height: Number(extent.getAttribute('cy') || 0),
+  };
+}
+
+function runsHtml(paragraph, ctx) {
+  let html = '';
+  for (const child of Array.from(paragraph.children)) {
+    if (child.localName === 'br') {
+      html += '<br>';
+      continue;
+    }
+    if (child.localName !== 'r' && child.localName !== 'fld') continue;
+
+    const text = collectText(child, 'a:t');
+    if (!text) continue;
+
+    const properties = child.getElementsByTagName('a:rPr')[0];
+    const style = [];
+    const points = properties && properties.getAttribute('sz') ? Number(properties.getAttribute('sz')) / 100 : 18;
+    style.push(`font-size:${ctx.pointsToCqw(points).toFixed(3)}cqw`);
+
+    if (properties) {
+      if (properties.getAttribute('b') === '1') style.push('font-weight:700');
+      if (properties.getAttribute('i') === '1') style.push('font-style:italic');
+      const underline = properties.getAttribute('u');
+      if (underline && underline !== 'none') style.push('text-decoration:underline');
+      const colour = colourFrom(properties, ctx.theme);
+      if (colour) style.push(`color:${colour}`);
+    }
+
+    html += `<span style="${style.join(';')}">${escapeHtml(text)}</span>`;
+  }
+  return html;
+}
+
+function textBodyHtml(txBody, ctx) {
+  if (!txBody) return '';
+  let html = '';
+  const paragraphs = txBody.getElementsByTagName('a:p');
+
+  for (let index = 0; index < paragraphs.length; index += 1) {
+    const paragraph = paragraphs[index];
+    const properties = paragraph.getElementsByTagName('a:pPr')[0];
+    const align = properties ? properties.getAttribute('algn') : '';
+    const style = [];
+    if (align === 'ctr') style.push('text-align:center');
+    else if (align === 'r') style.push('text-align:right');
+    else if (align === 'just') style.push('text-align:justify');
+
+    const bullet = properties && properties.getElementsByTagName('a:buChar').length ? '&#8226; ' : '';
+    const runs = runsHtml(paragraph, ctx);
+    if (!runs && !bullet) {
+      html += '<p>&nbsp;</p>';
+      continue;
+    }
+    html += `<p style="${style.join(';')}">${bullet}${runs}</p>`;
+  }
+  return html;
+}
+
+function positionedBox(geometry, inner, className, background, anchor, ctx) {
+  const style = [
+    `left:${percentOf(geometry.x, ctx.width).toFixed(3)}%`,
+    `top:${percentOf(geometry.y, ctx.height).toFixed(3)}%`,
+    `width:${percentOf(geometry.width, ctx.width).toFixed(3)}%`,
+    `height:${percentOf(geometry.height, ctx.height).toFixed(3)}%`,
+  ];
+  if (background) style.push(`background:${background}`);
+  if (anchor === 'ctr') style.push('justify-content:center');
+  else if (anchor === 'b') style.push('justify-content:flex-end');
+
+  return `<div class="${className}" style="${style.join(';')}">${inner}</div>`;
+}
+
+async function shapeHtml(element, ctx, archive) {
+  const name = element.localName;
+
+  if (name === 'pic') {
+    const geometry = shapeGeometry(element);
+    const blip = element.getElementsByTagName('a:blip')[0];
+    const relationId = blip ? blip.getAttribute('r:embed') : '';
+    const path = relationId ? ctx.relationships.get(relationId) : '';
+    if (!geometry || !path) return '';
+
+    if (!ctx.images.has(path)) {
+      const mime = imageMime(path);
+      const bytes = mime ? await readEntry(archive, path) : null;
+      ctx.images.set(path, bytes ? `data:${mime};base64,${base64FromBytes(bytes)}` : '');
+    }
+    const source = ctx.images.get(path);
+    if (!source) return '';
+
+    return positionedBox(geometry, `<img src="${source}" alt="" />`, 'slide-shape slide-image', '', '', ctx);
+  }
+
+  if (name === 'graphicFrame') {
+    const table = element.getElementsByTagName('a:tbl')[0];
+    if (!table) return '';
+    const geometry = shapeGeometry(element);
+    if (!geometry) return '';
+
+    const rows = [];
+    const rowNodes = table.getElementsByTagName('a:tr');
+    for (let rowIndex = 0; rowIndex < rowNodes.length; rowIndex += 1) {
+      const cells = [];
+      const cellNodes = rowNodes[rowIndex].getElementsByTagName('a:tc');
+      for (let cellIndex = 0; cellIndex < cellNodes.length; cellIndex += 1) {
+        const body = cellNodes[cellIndex].getElementsByTagName('a:txBody')[0];
+        cells.push(`<td>${textBodyHtml(body, ctx)}</td>`);
+      }
+      rows.push(`<tr>${cells.join('')}</tr>`);
+    }
+
+    return positionedBox(
+      geometry,
+      `<table class="slide-table">${rows.join('')}</table>`,
+      'slide-shape slide-table-box',
+      '',
+      '',
+      ctx
+    );
+  }
+
+  if (name === 'sp') {
+    const body = element.getElementsByTagName('p:txBody')[0];
+    const inner = textBodyHtml(body, ctx);
+    const geometry = shapeGeometry(element);
+    const background = colourFrom(element.getElementsByTagName('p:spPr')[0], ctx.theme);
+
+    if (!geometry) {
+      if (!inner) return '';
+      return `<div class="slide-shape slide-flow"${background ? ` style="background:${background}"` : ''}>${inner}</div>`;
+    }
+
+    const bodyProperties = element.getElementsByTagName('a:bodyPr')[0];
+    const anchor = bodyProperties ? bodyProperties.getAttribute('anchor') : '';
+    return positionedBox(geometry, inner, 'slide-shape', background, anchor, ctx);
+  }
+
+  return '';
+}
+
+function base64FromBytes(bytes) {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(index, index + chunk));
+  }
+  return btoa(binary);
+}
+
+function slideBackground(doc, theme) {
+  const background = doc.getElementsByTagName('p:bg')[0];
+  if (!background) return '';
+  return colourFrom(background, theme);
+}
+
 async function readPptx(archive) {
+  const presentation = await readEntry(archive, 'ppt/presentation.xml');
+  let widthEmu = 12192000;
+  let heightEmu = 6858000;
+
+  if (presentation) {
+    const presDoc = parseXml(presentation);
+    const size = presDoc.getElementsByTagName('p:sldSz')[0];
+    if (size) {
+      widthEmu = Number(size.getAttribute('cx') || widthEmu);
+      heightEmu = Number(size.getAttribute('cy') || heightEmu);
+    }
+  }
+
+  const theme = await themeColours(archive);
+  const referencePx = (widthEmu / EMU_PER_INCH) * 96 || 1280;
+  const ctx = {
+    theme,
+    width: widthEmu,
+    height: heightEmu,
+    images: new Map(),
+    relationships: new Map(),
+    // 1pt = 4/3 px at 96 dpi; cqw is 1% of the slide's own width.
+    pointsToCqw: (points) => (points * (4 / 3) * 100) / referencePx,
+  };
+
   const found = [];
   archive.entries.forEach((entry) => {
     const match = /^ppt\/slides\/slide(\d+)\.xml$/.exec(entry.name);
@@ -387,23 +673,56 @@ async function readPptx(archive) {
   });
   found.sort((a, b) => a.index - b.index);
 
-  const slides = [];
+  const pages = [];
+  const textOnly = [];
+
   for (const item of found.slice(0, MAX_SLIDES)) {
     const bytes = await readEntry(archive, item.path);
     if (!bytes) continue;
 
     const doc = parseXml(bytes);
+    const relationships = await readRelationships(archive, item.path);
+    const slideCtx = Object.assign({}, ctx, { relationships });
+
+    // Plain text, used if the deck turns out to have no drawable shapes.
     const paragraphs = [];
-    const nodes = doc.getElementsByTagName('a:p');
-    for (let index = 0; index < nodes.length; index += 1) {
-      const text = collectText(nodes[index], 'a:t').replace(/\s+/g, ' ').trim();
+    const textNodes = doc.getElementsByTagName('a:p');
+    for (let index = 0; index < textNodes.length; index += 1) {
+      const text = collectText(textNodes[index], 'a:t').replace(/\s+/g, ' ').trim();
       if (text) paragraphs.push(text);
     }
+    textOnly.push({ number: item.index, paragraphs });
 
-    slides.push({ number: item.index, paragraphs });
+    let shapes = '';
+    const tree = doc.getElementsByTagName('p:spTree')[0];
+    if (tree) {
+      for (const child of Array.from(tree.children)) {
+        if (child.localName === 'sp' || child.localName === 'pic' || child.localName === 'graphicFrame') {
+          shapes += await shapeHtml(child, slideCtx, archive);
+        }
+      }
+    }
+
+    pages.push({ number: item.index, shapes, background: slideBackground(doc, theme) });
   }
 
-  return renderSlides(slides, await presentationRatio(archive));
+  if (!pages.some((page) => page.shapes)) {
+    return renderSlides(textOnly, heightEmu ? widthEmu / heightEmu : 0);
+  }
+
+  const ratio = heightEmu ? widthEmu / heightEmu : 16 / 9;
+  const frames = pages
+    .map(
+      (page, index) => `<section class="slide-frame">
+        <div class="slide-canvas" style="background:${page.background || '#ffffff'}">${page.shapes}</div>
+        <span class="slide-number">Slide ${page.number || index + 1} of ${pages.length}</span>
+      </section>`
+    )
+    .join('');
+
+  return `<div class="preview-doc deck" style="--slide-ratio:${ratio.toFixed(4)}">
+      <div class="deck-scroll">${frames}</div>
+    </div>`;
 }
 
 /* ------------------------------------------------------------------ */

@@ -6,7 +6,7 @@ import { officeType, renderOfficePreview, renderDelimited, renderDocxFaithful } 
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 14';
+const BUILD = 'build 15';
 
 // Tells the lock-screen fallback in index.html that the app really started.
 window.__deluxeDriveStarted = true;
@@ -1779,8 +1779,7 @@ async function deleteNodesOfUser(userId) {
 /* ------------------------------------------------------------------ */
 
 let authUsers = [];
-let authMode = 'pick'; // pick | unlock | create
-let authUserId = null;
+let authMode = 'sign_in'; // sign_in | create
 
 async function initAuthScreen() {
   const buildNode = $('#auth-build');
@@ -1788,119 +1787,60 @@ async function initAuthScreen() {
 
   authUsers = await auth.listUsers();
 
-  if (!authUsers.length) {
-    authMode = 'create';
-    authUserId = null;
-  } else if (authUsers.length === 1) {
-    authMode = 'unlock';
-    authUserId = authUsers[0].id;
-  } else {
-    authMode = 'pick';
-    authUserId = null;
-  }
-
+  // Nobody has an account yet, so start on the create form. Once accounts
+  // exist the screen only asks for a name and password: the accounts on this
+  // device are never listed, so one person cannot see who else uses it.
+  authMode = authUsers.length ? 'sign_in' : 'create';
   renderAuthScreen();
 }
 
 function renderAuthScreen() {
-  const list = $('#auth-users');
-  const nameField = $('#name-field');
-  const password2Field = $('#pw2-field');
-  const submit = $('#auth-submit');
+  const creating = authMode === 'create';
   const newButton = $('#auth-new');
   const resetButton = $('#auth-reset');
-  const passwordLabel = $('#password-label');
-  const sub = $('#auth-sub');
 
-  const creating = authMode === 'create';
-  const selected = authUsers.find((user) => user.id === authUserId) || null;
+  $('#name-field').classList.remove('hidden');
+  $('#pw2-field').classList.toggle('hidden', !creating);
+  $('#password-label').textContent = creating ? 'Choose a password' : 'Password';
+  $('#auth-submit').textContent = creating ? 'Create account' : 'Unlock';
 
-  list.innerHTML = authUsers
-    .map(
-      (user) => `
-      <button class="user-chip${user.id === authUserId ? ' active' : ''}" type="button" data-user="${user.id}">
-        <span class="user-chip-avatar">${escapeHtml(user.name.slice(0, 1).toUpperCase())}</span>
-        <span class="user-chip-name">${escapeHtml(user.name)}</span>
-      </button>`
-    )
-    .join('');
-  list.classList.toggle('hidden', !authUsers.length || creating);
+  $('#auth-sub').textContent = creating
+    ? 'Create your own account. Nobody else on this device can see it or its files.'
+    : 'Sign in with your name and password. Each account and its files stay private.';
 
-  nameField.classList.toggle('hidden', !creating);
-  password2Field.classList.toggle('hidden', !creating);
-
-  // While choosing between accounts there is no password to type yet.
-  const picking = authMode === 'pick';
-  $('#password-field').classList.toggle('hidden', picking);
-  submit.classList.toggle('hidden', picking);
-
-  passwordLabel.textContent = creating
-    ? 'Choose a password'
-    : selected
-      ? `Password for ${selected.name}`
-      : 'Password';
-
-  submit.textContent = creating ? 'Create account' : 'Unlock';
-
+  newButton.textContent = creating ? 'Sign in to an existing account' : 'Create a new account';
   newButton.classList.toggle('hidden', creating && !authUsers.length);
-  newButton.textContent = creating
-    ? 'Back to accounts'
-    : picking
-      ? 'Create new account'
-      : 'Use another account';
 
-  resetButton.classList.toggle('hidden', creating || picking || !selected);
-  resetButton.textContent = selected ? `Forgot password? Erase ${selected.name}'s drive` : 'Forgot password?';
-
-  sub.textContent = creating
-    ? 'Create an account on this device. Each account has its own password and its own files.'
-    : selected
-      ? 'Enter your password to open this drive.'
-      : 'Choose an account, or create a new one.';
+  resetButton.classList.toggle('hidden', creating);
 
   $('#auth-password').value = '';
   $('#auth-password2').value = '';
-  $('#auth-name').value = '';
   $('#auth-error').textContent = '';
-
-  if (creating) $('#auth-name').focus();
-  else $('#auth-password').focus();
+  $('#auth-name').focus();
 }
 
 function bindAuthScreen() {
-  $('#auth-users').addEventListener('click', (event) => {
-    const chip = event.target.closest('[data-user]');
-    if (!chip) return;
-    authUserId = chip.dataset.user;
-    authMode = 'unlock';
-    renderAuthScreen();
-  });
-
   $('#auth-new').addEventListener('click', () => {
-    if (authMode === 'create') {
-      if (authUsers.length === 1) {
-        authMode = 'unlock';
-        authUserId = authUsers[0].id;
-      } else {
-        authMode = 'pick';
-        authUserId = null;
-      }
-    } else if (authMode === 'pick') {
-      authMode = 'create';
-      authUserId = null;
-    } else {
-      authMode = 'pick';
-      authUserId = null;
-    }
+    authMode = authMode === 'create' ? 'sign_in' : 'create';
     renderAuthScreen();
   });
 
   $('#auth-reset').addEventListener('click', async () => {
-    const user = authUsers.find((entry) => entry.id === authUserId);
-    if (!user) return;
+    const typed = $('#auth-name').value.trim();
+    const user = typed
+      ? authUsers.find((entry) => entry.name.toLowerCase() === typed.toLowerCase())
+      : null;
+
+    if (!user) {
+      $('#auth-error').textContent = typed
+        ? 'There is no account with that name on this device.'
+        : 'Type your account name above first, then tap Forgot password.';
+      $('#auth-name').focus();
+      return;
+    }
 
     const sure = await showDialog({
-      title: `Erase ${user.name}'s drive?`,
+      title: `Erase the account “${user.name}”?`,
       message:
         'This deletes that account and every file in it from this device. A forgotten password cannot be recovered.',
       confirmLabel: 'Erase account',
@@ -1910,9 +1850,8 @@ function bindAuthScreen() {
 
     await deleteNodesOfUser(user.id);
     await auth.removeUser(user.id);
-    authUserId = null;
     await initAuthScreen();
-    toast(`${user.name}'s drive was erased`);
+    toast(`The account “${user.name}” was erased`);
   });
 
   $('#auth-form').addEventListener('submit', async (event) => {
@@ -1920,15 +1859,21 @@ function bindAuthScreen() {
 
     const error = $('#auth-error');
     const submit = $('#auth-submit');
+    const name = $('#auth-name').value.trim();
     const password = $('#auth-password').value;
     error.textContent = '';
 
+    if (!name) {
+      error.textContent = 'Type your name.';
+      $('#auth-name').focus();
+      return;
+    }
+
     if (authMode === 'create') {
-      const name = $('#auth-name').value.trim();
       const confirmPassword = $('#auth-password2').value;
 
-      if (!name) {
-        error.textContent = 'Give this account a name.';
+      if (name.length < 2) {
+        error.textContent = 'That name is too short.';
         return;
       }
       if (password.length < 4) {
@@ -1954,14 +1899,14 @@ function bindAuthScreen() {
       return;
     }
 
-    if (authMode === 'pick') {
-      error.textContent = 'Choose an account above, or create a new one.';
-      return;
-    }
+    const user = authUsers.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
 
-    const user = authUsers.find((entry) => entry.id === authUserId);
+    // The same message whether the name is unknown or the password is wrong,
+    // so this screen cannot be used to find out who has an account here.
+    const genericError = "That name and password don't match an account on this device.";
+
     if (!user) {
-      error.textContent = 'Choose an account.';
+      error.textContent = genericError;
       return;
     }
 
@@ -1970,7 +1915,7 @@ function bindAuthScreen() {
       const ok = await auth.verifyUser(user.id, password);
       submit.disabled = false;
       if (!ok) {
-        error.textContent = 'Wrong password. Try again.';
+        error.textContent = genericError;
         $('#auth-password').select();
         return;
       }

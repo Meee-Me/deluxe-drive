@@ -19,13 +19,11 @@
         <img src="icon.svg" alt="" width="56" height="56" />
       </div>
       <h1>Deluxe Drive</h1>
-      <p id="auth-sub" class="auth-sub">Choose an account to open its drive.</p>
+      <p id="auth-sub" class="auth-sub">Sign in with your name and password. Each account and its files stay private.</p>
 
-      <div id="auth-users" class="user-list hidden"></div>
-
-      <label class="field hidden" id="name-field">
+      <label class="field" id="name-field">
         <span>Your name</span>
-        <input id="auth-name" type="text" autocomplete="off" maxlength="24" placeholder="e.g. Sam" />
+        <input id="auth-name" type="text" autocomplete="username" maxlength="24" placeholder="e.g. Sam" required />
       </label>
 
       <label class="field" id="password-field">
@@ -41,8 +39,8 @@
       <p id="auth-error" class="auth-error" role="alert"></p>
 
       <button id="auth-submit" class="btn primary block" type="submit">Unlock</button>
-      <button id="auth-new" class="link hidden" type="button">Use another account</button>
-      <button id="auth-reset" class="link hidden" type="button">Forgot password?</button>
+      <button id="auth-new" class="link" type="button">Create a new account</button>
+      <button id="auth-reset" class="link" type="button">Forgot password?</button>
 
       <p class="auth-foot">
         <span id="auth-build">build</span>
@@ -274,6 +272,6 @@
   </script>
 
   <!-- The ?v= query busts a stale cached copy of the module between deploys. -->
-  <script type="module" src="js/app.js?v=12"></script>
+  <script type="module" src="js/app.js?v=13"></script>
 </body>
 </html>

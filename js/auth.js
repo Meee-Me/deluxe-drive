@@ -73,7 +73,8 @@ export async function createUser(name, password) {
   const clean = String(name || '').trim() || `User ${users.length + 1}`;
 
   if (users.some((user) => user.name.toLowerCase() === clean.toLowerCase())) {
-    throw new Error('That name is already used on this device.');
+    // Deliberately neutral: this screen must not confirm which names exist.
+    throw new Error("That name can't be used here — choose another.");
   }
 
   const salt = randomHex(16);

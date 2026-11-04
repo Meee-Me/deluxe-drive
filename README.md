@@ -5,10 +5,11 @@ Google: your files live in this browser's IndexedDB, behind a password you choos
 
 ## What it does
 
-- **Accounts and passwords** — several people can use the same browser. Each account has its own
-  name, its own password and its own files, so one person's folders never appear in another's
-  drive. Only a salted PBKDF2-SHA256 hash is stored, never the password, and the password is
-  asked for **every time** the page is opened — nothing is remembered between visits.
+- **Accounts and passwords** — several people can use the same browser without seeing each other.
+  Accounts are **never listed**: you sign in by typing your own name and password, so nobody can
+  find out who else has a drive on the device, and each account's files are only ever loaded for
+  that account. Only a salted PBKDF2-SHA256 hash is stored, never the password, and the password
+  is asked for **every time** the page is opened — nothing is remembered between visits.
 - **Folders and files** — upload any file type (single, multiple, whole folders), create folders,
   rename, move, star, delete to trash, restore, delete forever, empty trash.
 - **Views** — My Drive with breadcrumbs, Recent, Starred, Trash, and full-name search.

@@ -6,7 +6,7 @@ import { officeType, renderOfficePreview, renderDelimited, renderDocxFaithful } 
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 15';
+const BUILD = 'build 16';
 
 // Tells the lock-screen fallback in index.html that the app really started.
 window.__deluxeDriveStarted = true;
@@ -1725,6 +1725,10 @@ async function enterApp(user) {
   state.nodes = new Map();
   auth.forgetSession();
 
+  // Next time this browser opens the drive, offer this account (and only
+  // this account) by name; the password is still required every visit.
+  if (user && user.id) rememberLastUser(user.id);
+
   $('#auth').classList.add('hidden');
   $('#app').classList.remove('hidden');
 
@@ -1780,6 +1784,25 @@ async function deleteNodesOfUser(userId) {
 
 let authUsers = [];
 let authMode = 'sign_in'; // sign_in | create
+let authHintId = null; // the account last used in this browser
+
+const LAST_USER_KEY = 'dd.lastUser';
+
+function readLastUser() {
+  try {
+    return localStorage.getItem(LAST_USER_KEY);
+  } catch (error) {
+    return null;
+  }
+}
+
+function rememberLastUser(userId) {
+  try {
+    localStorage.setItem(LAST_USER_KEY, userId);
+  } catch (error) {
+    /* storage can be blocked; the drive still works */
+  }
+}
 
 async function initAuthScreen() {
   const buildNode = $('#auth-build');
@@ -1787,39 +1810,63 @@ async function initAuthScreen() {
 
   authUsers = await auth.listUsers();
 
-  // Nobody has an account yet, so start on the create form. Once accounts
-  // exist the screen only asks for a name and password: the accounts on this
-  // device are never listed, so one person cannot see who else uses it.
+  // Only the account last used in this browser is offered by name; every other
+  // account stays invisible. A first visit, or a cleared browser, gets the
+  // plain "name + password" form.
+  const last = readLastUser();
+  const hinted = last ? authUsers.find((user) => user.id === last) || null : null;
+  authHintId = hinted ? hinted.id : null;
+
   authMode = authUsers.length ? 'sign_in' : 'create';
   renderAuthScreen();
 }
 
 function renderAuthScreen() {
   const creating = authMode === 'create';
+  const hinted = authHintId ? authUsers.find((user) => user.id === authHintId) || null : null;
   const newButton = $('#auth-new');
   const resetButton = $('#auth-reset');
+  const switchButton = $('#auth-switch');
 
-  $('#name-field').classList.remove('hidden');
-  $('#pw2-field').classList.toggle('hidden', !creating);
+  const showName = creating || !hinted;
+  $('#name-field').classList.toggle('hidden', !showName);
+  $('#auth-name').value = hinted && !creating ? hinted.name : '';
+  $('#auth-password').value = '';
+  $('#auth-password2').value = '';
+  $('#auth-error').textContent = '';
+
   $('#password-label').textContent = creating ? 'Choose a password' : 'Password';
+  $('#pw2-field').classList.toggle('hidden', !creating);
   $('#auth-submit').textContent = creating ? 'Create account' : 'Unlock';
 
   $('#auth-sub').textContent = creating
     ? 'Create your own account. Nobody else on this device can see it or its files.'
-    : 'Sign in with your name and password. Each account and its files stay private.';
+    : hinted
+      ? `Welcome back, ${hinted.name}. Enter your password to open your drive.`
+      : 'Sign in with your name and password. Each account and its files stay private.';
+
+  switchButton.classList.toggle('hidden', !hinted);
+  switchButton.textContent = hinted ? `Not ${hinted.name}? Use a different name` : 'Use a different name';
 
   newButton.textContent = creating ? 'Sign in to an existing account' : 'Create a new account';
   newButton.classList.toggle('hidden', creating && !authUsers.length);
-
   resetButton.classList.toggle('hidden', creating);
 
-  $('#auth-password').value = '';
-  $('#auth-password2').value = '';
-  $('#auth-error').textContent = '';
-  $('#auth-name').focus();
+  if (hinted && !creating) $('#auth-password').focus();
+  else $('#auth-name').focus();
 }
 
 function bindAuthScreen() {
+  $('#auth-switch').addEventListener('click', () => {
+    authHintId = null;
+    try {
+      localStorage.removeItem(LAST_USER_KEY);
+    } catch (error) {
+      /* nothing to clear */
+    }
+    renderAuthScreen();
+  });
+
   $('#auth-new').addEventListener('click', () => {
     authMode = authMode === 'create' ? 'sign_in' : 'create';
     renderAuthScreen();

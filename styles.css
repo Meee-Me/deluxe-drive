@@ -186,9 +186,11 @@ button {
   gap: 14px;
 }
 
-.auth-logo svg {
+.auth-logo svg,
+.auth-logo img {
   width: 44px;
   height: 44px;
+  display: block;
 }
 
 .auth-card h1 {
@@ -1435,4 +1437,92 @@ button {
 .office-slide p:first-of-type {
   font-size: 16px;
   font-weight: 600;
+}
+
+
+/* ---------------- App icon and Drive-inspired polish ---------------- */
+
+.brand-mark {
+  display: block;
+  border-radius: 7px;
+}
+
+.auth-logo img {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+}
+
+.brand {
+  font-weight: 600;
+  letter-spacing: -0.3px;
+}
+
+.topbar {
+  border-bottom-color: transparent;
+  box-shadow: 0 1px 0 var(--border), 0 1px 8px rgba(31, 41, 55, 0.04);
+}
+
+.search {
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.search:focus-within {
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.search input::placeholder {
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+.new-btn {
+  border-radius: 16px;
+  box-shadow: 0 1px 2px rgba(49, 46, 129, 0.18), 0 6px 16px rgba(49, 46, 129, 0.18);
+}
+
+.new-btn:hover {
+  filter: brightness(1.05);
+}
+
+.file-grid .card {
+  border-radius: 16px;
+  transition: box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+}
+
+.file-grid .card:hover {
+  border-color: transparent;
+  box-shadow: 0 2px 4px rgba(31, 41, 55, 0.1), 0 12px 26px rgba(31, 41, 55, 0.1);
+  transform: translateY(-1px);
+}
+
+.file-grid .card-thumb {
+  border-radius: 12px;
+}
+
+.empty-icon .ico {
+  width: 72px;
+  height: 72px;
+}
+
+.empty h2 {
+  font-size: 18px;
+}
+
+.auth {
+  background: radial-gradient(circle at 18% 18%, rgba(99, 102, 241, 0.2), transparent 55%),
+    radial-gradient(circle at 82% 86%, rgba(20, 184, 166, 0.16), transparent 55%), var(--bg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .file-grid .card,
+  .new-btn,
+  .search {
+    transition: none;
+  }
+
+  .file-grid .card:hover {
+    transform: none;
+  }
 }

@@ -6,7 +6,7 @@ import { officeType, renderOfficePreview, renderDelimited } from './office.js';
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 10';
+const BUILD = 'build 11';
 
 // Tells the lock-screen fallback in index.html that the app really started.
 window.__deluxeDriveStarted = true;
@@ -145,6 +145,13 @@ if (theme !== 'dark' && theme !== 'light') {
   theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 document.documentElement.setAttribute('data-theme', theme);
+
+// Keep the browser chrome (the bar above the page) in step with the theme.
+function updateThemeColor(currentTheme) {
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', currentTheme === 'dark' ? '#131314' : '#4f46e5');
+}
+updateThemeColor(theme);
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -1441,6 +1448,7 @@ function bindUI() {
     theme = theme === 'dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('dd.theme', theme);
+    updateThemeColor(theme);
     $('#theme-btn').innerHTML = icon(theme === 'dark' ? 'sun' : 'moon');
   });
 

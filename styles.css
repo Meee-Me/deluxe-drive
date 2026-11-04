@@ -1757,7 +1757,7 @@ button {
   background: var(--surface-2);
 }
 
-.office-table.office-table-sheet tbody tr:first-child td {
+.office-table.office-table-sheet tbody tr:first-child td:not(.sheet-row-head):not(.sheet-corner) {
   background: transparent;
   font-weight: 400;
 }

@@ -13,9 +13,10 @@ Google: your files live in this browser's IndexedDB, behind a password you choos
   rename, move, star, delete to trash, restore, delete forever, empty trash.
 - **Views** — My Drive with breadcrumbs, Recent, Starred, Trash, and full-name search.
 - **Previews** — images, video, audio and PDF open inline; Word (`.docx`), Excel (`.xlsx`),
-  PowerPoint (`.pptx`), OpenDocument (`.odt`, `.ods`, `.odp`) and Rich Text (`.rtf`) files are
-  unpacked and read in the browser, shown as text, tables and slides; CSV/TSV open as tables;
-  plain text and code are shown as text. Anything else offers a download.
+  OpenDocument (`.odt`, `.ods`, `.odp`) and Rich Text (`.rtf`) files are unpacked and read in the
+  browser; PowerPoint (`.pptx`) opens as a slide deck — white 16:9 pages you flip through with a
+  slide counter — and CSV/TSV open as tables; plain text and code are shown as text. Anything else
+  offers a download.
 - **Select mode** — select several items and download, star, move or delete them together, plus
   a details panel and next/previous navigation inside the preview.
 - **Grid and list layouts**, sorting by name / last modified / size, storage usage meter, light and

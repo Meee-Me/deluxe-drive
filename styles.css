@@ -1581,3 +1581,109 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+
+/* ---------------- Slide decks (.pptx / .odp) ---------------- */
+
+/* Slides are shown the way a presentation looks: white 16:9 pages that
+   scroll-snap one at a time, with a slide counter, instead of a text dump. */
+.deck {
+  padding: 0;
+  background: var(--surface-2);
+}
+
+.deck-scroll {
+  height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 20px;
+  scroll-snap-type: y mandatory;
+  overscroll-behavior: contain;
+}
+
+.slide-page {
+  position: relative;
+  flex: none;
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
+  aspect-ratio: 16 / 9;
+  padding: clamp(24px, 5vw, 52px) clamp(28px, 6vw, 64px);
+  border-radius: 14px;
+  background: #ffffff;
+  color: #202124;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12), 0 12px 32px rgba(15, 23, 42, 0.14);
+  scroll-snap-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.slide-inner {
+  max-height: 100%;
+  overflow: auto;
+}
+
+.slide-title {
+  margin: 0 0 18px;
+  font-size: clamp(19px, 2.6vw, 32px);
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: #111827;
+}
+
+.slide-bullets {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: clamp(12.5px, 1.35vw, 16px);
+  line-height: 1.5;
+  color: #374151;
+}
+
+.slide-bullets li::marker {
+  color: #6366f1;
+}
+
+.slide-empty {
+  margin: 0;
+  color: #6b7280;
+  font-size: 13.5px;
+}
+
+.slide-number {
+  position: absolute;
+  right: 16px;
+  bottom: 12px;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #9ca3af;
+}
+
+@media (max-width: 620px) {
+  .deck-slide,
+  .slide-page {
+    border-radius: 10px;
+  }
+
+  .deck-scroll {
+    padding: 12px;
+    gap: 14px;
+  }
+
+  .slide-page {
+    padding: 22px 24px;
+  }
+
+  .slide-title {
+    margin-bottom: 12px;
+  }
+}

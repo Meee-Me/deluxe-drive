@@ -299,18 +299,32 @@ function renderSlides(slides) {
     return '<div class="preview-doc"><div class="office-doc"><p class="muted">This presentation has no readable text.</p></div></div>';
   }
 
-  const html = slides
-    .map(
-      (slide) => `<section class="office-slide">
-        <h3>Slide ${slide.number}</h3>
-        ${slide.paragraphs
-          .map((text) => (text ? `<p>${escapeHtml(text)}</p>` : ''))
-          .join('')}
-      </section>`
-    )
+  const total = slides.length;
+
+  const pages = slides
+    .map((slide) => {
+      const paragraphs = slide.paragraphs;
+      const title = paragraphs.length ? paragraphs[0] : '';
+      const bullets = paragraphs.slice(1);
+
+      return `<section class="slide-page" data-slide="${slide.number}">
+        <div class="slide-inner">
+          ${title ? `<h4 class="slide-title">${escapeHtml(title)}</h4>` : ''}
+          ${
+            bullets.length
+              ? `<ul class="slide-bullets">${bullets.map((text) => `<li>${escapeHtml(text)}</li>`).join('')}</ul>`
+              : ''
+          }
+          ${title || bullets.length ? '' : '<p class="slide-empty">This slide has no text.</p>'}
+        </div>
+        <span class="slide-number">Slide ${slide.number} of ${total}</span>
+      </section>`;
+    })
     .join('');
 
-  return `<div class="preview-doc office-stack">${html}</div>`;
+  return `<div class="preview-doc deck">
+      <div class="deck-scroll">${pages}</div>
+    </div>`;
 }
 
 async function readPptx(archive) {

@@ -132,13 +132,25 @@ function collectText(parent, tagName) {
 /* Word (.docx / .odt)                                                 */
 /* ------------------------------------------------------------------ */
 
-function renderParagraphs(paragraphs, className) {
+function renderParagraphs(paragraphs, className, pageRatio) {
   const body = paragraphs
     .map((text) => (text ? `<p>${escapeHtml(text)}</p>` : '<p class="office-gap"></p>'))
     .join('');
-  return `<div class="preview-doc"><div class="office-doc ${className}">${
+  const ratio = pageRatio ? ` style="--page-ratio:${pageRatio.toFixed(4)}"` : '';
+  return `<div class="preview-doc"><div class="doc-page ${className}"${ratio}>${
     body || '<p class="muted">This document has no readable text.</p>'
   }</div></div>`;
+}
+
+// Reads the page size Word stored (twips: 1440 per inch) so the preview has
+// the shape of the real page instead of an arbitrary column.
+function docPageRatio(doc) {
+  const size = doc.getElementsByTagName('w:pgSz')[0];
+  if (!size) return 0;
+  const width = Number(size.getAttribute('w:w') || 0);
+  const height = Number(size.getAttribute('w:h') || 0);
+  if (!width || !height) return 0;
+  return width / height;
 }
 
 async function readDocx(archive) {
@@ -154,7 +166,7 @@ async function readDocx(archive) {
     paragraphs.push(text);
   }
 
-  return renderParagraphs(paragraphs, 'office-docx');
+  return renderParagraphs(paragraphs, 'office-docx', docPageRatio(doc));
 }
 
 /* ------------------------------------------------------------------ */
@@ -176,7 +188,18 @@ function trimRow(cells) {
   return cells.slice(0, last + 1);
 }
 
-function renderGrid(sheetName, rows) {
+function columnName(index) {
+  let value = index + 1;
+  let name = '';
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    name = String.fromCharCode(65 + remainder) + name;
+    value = Math.floor((value - 1) / 26);
+  }
+  return name;
+}
+
+function renderGrid(sheetName, rows, withHeaders = false) {
   const trimmed = rows.map(trimRow).filter((cells) => cells.length > 0);
   const heading = sheetName ? `<h3 class="office-sheet-name">${escapeHtml(sheetName)}</h3>` : '';
 
@@ -184,21 +207,35 @@ function renderGrid(sheetName, rows) {
     return `<div class="office-sheet">${heading}<p class="muted">This sheet is empty.</p></div>`;
   }
 
+  const widest = trimmed.reduce((most, cells) => Math.max(most, cells.length), 0);
+  const columnCount = Math.min(Math.max(widest, withHeaders ? 5 : 1), MAX_COLUMNS);
+
+  const headerRow = withHeaders
+    ? `<tr class="sheet-head"><td class="sheet-corner"></td>${Array.from(
+        { length: columnCount },
+        (_, column) => `<td>${columnName(column)}</td>`
+      ).join('')}</tr>`
+    : '';
+
   const body = trimmed
-    .map((cells) => {
+    .map((cells, rowIndex) => {
       const tds = [];
-      for (let column = 0; column < MAX_COLUMNS; column += 1) {
+      const rowNumber = withHeaders ? `<td class="sheet-row-head">${rowIndex + 1}</td>` : '';
+      for (let column = 0; column < columnCount; column += 1) {
         const value = cells[column] === undefined ? '' : String(cells[column]).slice(0, MAX_CELL_CHARS);
         tds.push(`<td>${escapeHtml(value)}</td>`);
       }
-      return `<tr>${tds.join('')}</tr>`;
+      return `<tr>${rowNumber}${tds.join('')}</tr>`;
     })
     .join('');
 
   return `<div class="office-sheet">
       ${heading}
       <div class="office-scroll">
-        <table class="office-table"><tbody>${body}</tbody></table>
+        <table class="office-table${withHeaders ? ' office-table-sheet' : ''}">
+          <thead>${headerRow}</thead>
+          <tbody>${body}</tbody>
+        </table>
       </div>
     </div>`;
 }
@@ -284,7 +321,7 @@ async function renderWorkbook(archive) {
   const parts = [];
   for (let index = 0; index < paths.length && index < 12; index += 1) {
     const rows = await readWorksheet(archive, paths[index], shared);
-    parts.push(renderGrid(names[index] || `Sheet ${index + 1}`, rows));
+    parts.push(renderGrid(names[index] || `Sheet ${index + 1}`, rows, true));
   }
 
   return `<div class="preview-doc office-stack">${parts.join('')}</div>`;
@@ -294,12 +331,13 @@ async function renderWorkbook(archive) {
 /* PowerPoint (.pptx / .odp)                                           */
 /* ------------------------------------------------------------------ */
 
-function renderSlides(slides) {
+function renderSlides(slides, slideRatio) {
   if (!slides.length) {
     return '<div class="preview-doc"><div class="office-doc"><p class="muted">This presentation has no readable text.</p></div></div>';
   }
 
   const total = slides.length;
+  const ratio = slideRatio ? ` style="--slide-ratio:${slideRatio.toFixed(4)}"` : '';
 
   const pages = slides
     .map((slide) => {
@@ -322,9 +360,23 @@ function renderSlides(slides) {
     })
     .join('');
 
-  return `<div class="preview-doc deck">
+  return `<div class="preview-doc deck"${ratio}>
       <div class="deck-scroll">${pages}</div>
     </div>`;
+}
+
+// The size of the slides as saved in the file (EMU: 914400 per inch), so a
+// 4:3 deck renders 4:3 instead of being forced into 16:9.
+async function presentationRatio(archive) {
+  const bytes = await readEntry(archive, 'ppt/presentation.xml');
+  if (!bytes) return 0;
+  const doc = parseXml(bytes);
+  const size = doc.getElementsByTagName('p:sldSz')[0];
+  if (!size) return 0;
+  const width = Number(size.getAttribute('cx') || 0);
+  const height = Number(size.getAttribute('cy') || 0);
+  if (!width || !height) return 0;
+  return width / height;
 }
 
 async function readPptx(archive) {
@@ -351,7 +403,7 @@ async function readPptx(archive) {
     slides.push({ number: item.index, paragraphs });
   }
 
-  return renderSlides(slides);
+  return renderSlides(slides, await presentationRatio(archive));
 }
 
 /* ------------------------------------------------------------------ */
@@ -391,7 +443,7 @@ async function renderOpenDocument(archive, type) {
         }
         rows.push(cells);
       }
-      parts.push(renderGrid(tables[tableIndex].getAttribute('table:name') || `Sheet ${tableIndex + 1}`, rows));
+      parts.push(renderGrid(tables[tableIndex].getAttribute('table:name') || `Sheet ${tableIndex + 1}`, rows, true));
     }
     return `<div class="preview-doc office-stack">${parts.join('')}</div>`;
   }

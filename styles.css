@@ -1687,3 +1687,77 @@ button {
     margin-bottom: 12px;
   }
 }
+
+
+/* ---------------- Fidelity: real page and slide shapes ---------------- */
+
+/* Word: a page-shaped sheet using the size stored in the document. */
+.doc-page {
+  width: 100%;
+  max-width: 780px;
+  margin: 0 auto;
+  padding: clamp(28px, 6vw, 56px) clamp(24px, 6vw, 60px);
+  background: #ffffff;
+  color: #1f1f1f;
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12), 0 10px 30px rgba(15, 23, 42, 0.1);
+  aspect-ratio: var(--page-ratio);
+  font-size: 14px;
+  line-height: 1.7;
+  overflow-wrap: break-word;
+}
+
+.doc-page p {
+  margin: 0 0 0.9em;
+}
+
+.doc-page.office-rtf {
+  font-family: Georgia, 'Times New Roman', serif;
+}
+
+/* Slides keep the presentation's own aspect ratio. */
+.slide-page {
+  aspect-ratio: var(--slide-ratio, 16 / 9);
+}
+
+/* Spreadsheet grid with column letters and row numbers, like a sheet. */
+.office-table.sheet-table,
+.office-table.office-sheet-table {
+  border-collapse: collapse;
+}
+
+.office-table .sheet-head td {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  min-width: 58px;
+}
+
+.office-table .sheet-row-head {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+  min-width: 34px;
+}
+
+.office-table .sheet-corner {
+  position: sticky;
+  left: 0;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-2);
+}
+
+.office-table.office-table-sheet tbody tr:first-child td {
+  background: transparent;
+  font-weight: 400;
+}

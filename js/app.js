@@ -6,7 +6,7 @@ import { officeType, renderOfficePreview, renderDelimited } from './office.js';
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 12';
+const BUILD = 'build 13';
 
 // Tells the lock-screen fallback in index.html that the app really started.
 window.__deluxeDriveStarted = true;

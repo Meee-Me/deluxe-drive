@@ -1,12 +1,16 @@
-// Password handling. The password itself is never stored: a PBKDF2-SHA256 hash
-// with a random salt lives in IndexedDB, and "keep me unlocked on this device"
-// remembers that hash in localStorage. Changing the password changes the hash,
-// which also invalidates a remembered unlock.
+// Accounts and passwords for this device.
+//
+// Several people can use one browser: each account has its own password and
+// its own files. Only a PBKDF2-SHA256 hash with a random salt is stored, never
+// the password itself. Nothing is remembered between visits — the password is
+// asked for every time the page is opened.
 
 import { db } from './db.js';
 
-const ACCOUNT_KEY = 'account';
-const UNLOCK_KEY = 'dd.unlock';
+const USERS_KEY = 'users';
+const LEGACY_KEY = 'account'; // the old single-account record
+const LEGACY_ID = 'u_legacy';
+const LEGACY_UNLOCK_KEY = 'dd.unlock';
 const ITERATIONS = 120000;
 
 function bytesToHex(bytes) {
@@ -46,65 +50,120 @@ async function derive(password, saltHex) {
   return bytesToHex(new Uint8Array(bits));
 }
 
-async function readAccount() {
-  const record = await db.getSetting(ACCOUNT_KEY);
-  return record && record.value ? record.value : null;
+async function readUsers() {
+  const record = await db.getSetting(USERS_KEY);
+  return record && Array.isArray(record.value) ? record.value : [];
 }
 
-export async function hasAccount() {
-  const account = await readAccount();
-  return Boolean(account && account.hash && account.salt);
+async function writeUsers(users) {
+  await db.putSetting(USERS_KEY, users);
 }
 
-export async function createAccount(password) {
+export async function listUsers() {
+  return readUsers();
+}
+
+export async function hasUsers() {
+  const users = await readUsers();
+  return users.length > 0;
+}
+
+export async function createUser(name, password) {
+  const users = await readUsers();
+  const clean = String(name || '').trim() || `User ${users.length + 1}`;
+
+  if (users.some((user) => user.name.toLowerCase() === clean.toLowerCase())) {
+    throw new Error('That name is already used on this device.');
+  }
+
   const salt = randomHex(16);
   const hash = await derive(password, salt);
-  await db.putSetting(ACCOUNT_KEY, { salt, hash, createdAt: Date.now() });
-  return hash;
+  const user = {
+    id: `u_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+    name: clean,
+    salt,
+    hash,
+    createdAt: Date.now(),
+  };
+
+  users.push(user);
+  await writeUsers(users);
+  return user;
 }
 
-export async function verify(password) {
-  const account = await readAccount();
-  if (!account || !account.salt) return false;
-  const hash = await derive(password, account.salt);
-  return hash === account.hash;
+export async function verifyUser(userId, password) {
+  const users = await readUsers();
+  const user = users.find((entry) => entry.id === userId);
+  if (!user || !user.salt) return false;
+
+  const hash = await derive(password, user.salt);
+  return hash === user.hash;
 }
 
-export async function changePassword(currentPassword, nextPassword) {
-  if (!(await verify(currentPassword))) return false;
-  const salt = randomHex(16);
-  const hash = await derive(nextPassword, salt);
-  await db.putSetting(ACCOUNT_KEY, { salt, hash, createdAt: Date.now() });
-  if (wasRemembered()) localStorage.setItem(UNLOCK_KEY, hash);
+export async function changePassword(userId, currentPassword, nextPassword) {
+  if (!(await verifyUser(userId, currentPassword))) return false;
+
+  const users = await readUsers();
+  const user = users.find((entry) => entry.id === userId);
+  if (!user) return false;
+
+  user.salt = randomHex(16);
+  user.hash = await derive(nextPassword, user.salt);
+  user.updatedAt = Date.now();
+  await writeUsers(users);
   return true;
 }
 
-export async function remember(enabled) {
-  const account = await readAccount();
-  if (enabled && account) localStorage.setItem(UNLOCK_KEY, account.hash);
-  else localStorage.removeItem(UNLOCK_KEY);
-}
+export async function renameUser(userId, name) {
+  const clean = String(name || '').trim();
+  if (!clean) return false;
 
-export function wasRemembered() {
-  return Boolean(localStorage.getItem(UNLOCK_KEY));
-}
-
-export async function tryRestore() {
-  const stored = localStorage.getItem(UNLOCK_KEY);
-  if (!stored) return false;
-  const account = await readAccount();
-  if (!account || account.hash !== stored) {
-    localStorage.removeItem(UNLOCK_KEY);
+  const users = await readUsers();
+  if (users.some((user) => user.id !== userId && user.name.toLowerCase() === clean.toLowerCase())) {
     return false;
   }
+  const user = users.find((entry) => entry.id === userId);
+  if (!user) return false;
+
+  user.name = clean;
+  await writeUsers(users);
   return true;
 }
 
-export function forget() {
-  localStorage.removeItem(UNLOCK_KEY);
+export async function removeUser(userId) {
+  const users = await readUsers();
+  await writeUsers(users.filter((user) => user.id !== userId));
 }
 
-export async function destroyAccount() {
-  await db.deleteSetting(ACCOUNT_KEY);
-  localStorage.removeItem(UNLOCK_KEY);
+// Upgrades the old single-account layout into an account called "My drive",
+// so existing files and password keep working.
+export async function migrateLegacyAccount() {
+  const users = await readUsers();
+  if (users.length) return users;
+
+  const legacy = await db.getSetting(LEGACY_KEY);
+  if (!legacy || !legacy.value || !legacy.value.hash) return users;
+
+  const user = {
+    id: LEGACY_ID,
+    name: 'My drive',
+    salt: legacy.value.salt,
+    hash: legacy.value.hash,
+    createdAt: legacy.value.createdAt || Date.now(),
+  };
+
+  await writeUsers([user]);
+  await db.deleteSetting(LEGACY_KEY);
+  return [user];
+}
+
+// The password is never remembered: clear any leftover "stay unlocked" token
+// from older versions of the app.
+export function forgetSession() {
+  try {
+    localStorage.removeItem(LEGACY_UNLOCK_KEY);
+    localStorage.removeItem('dd.unlocked');
+  } catch (error) {
+    /* storage can be blocked; nothing to do */
+  }
 }

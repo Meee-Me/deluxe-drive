@@ -5,9 +5,10 @@ Google: your files live in this browser's IndexedDB, behind a password you choos
 
 ## What it does
 
-- **Password lock** — on first run you create a password; it is never stored, only a salted
-  PBKDF2-SHA256 hash (WebCrypto). "Keep me unlocked on this device" remembers the unlock in
-  `localStorage`; changing the password invalidates that.
+- **Accounts and passwords** — several people can use the same browser. Each account has its own
+  name, its own password and its own files, so one person's folders never appear in another's
+  drive. Only a salted PBKDF2-SHA256 hash is stored, never the password, and the password is
+  asked for **every time** the page is opened — nothing is remembered between visits.
 - **Folders and files** — upload any file type (single, multiple, whole folders), create folders,
   rename, move, star, delete to trash, restore, delete forever, empty trash.
 - **Views** — My Drive with breadcrumbs, Recent, Starred, Trash, and full-name search.
@@ -38,8 +39,10 @@ js/ui.js        icons, formatting, toasts, modal dialogs
 ## Data notes
 
 - Files are stored as Blobs in IndexedDB, so the browser's storage limit (often several GB) is the
-  only cap. Each browser/device has its own drive; clearing site data erases it.
-- "Erase everything" in the account menu wipes files and the password from this device.
+  only cap. Every file carries the account that owns it; each browser/device has its own set of
+  accounts; clearing site data erases them all.
+- "Erase my files" in the account menu empties the signed-in account's drive but keeps its
+  password; on the lock screen, "Forgot password?" erases a whole account and its files.
 - Because everything is client-side, the password protects the UI — someone with access to the
   device's developer tools could still read IndexedDB. It is not encryption at rest.
 

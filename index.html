@@ -19,10 +19,17 @@
         <img src="icon.svg" alt="" width="56" height="56" />
       </div>
       <h1>Deluxe Drive</h1>
-      <p id="auth-sub" class="auth-sub">Enter your password to unlock your drive.</p>
+      <p id="auth-sub" class="auth-sub">Choose an account to open its drive.</p>
 
-      <label class="field">
-        <span>Password</span>
+      <div id="auth-users" class="user-list hidden"></div>
+
+      <label class="field hidden" id="name-field">
+        <span>Your name</span>
+        <input id="auth-name" type="text" autocomplete="off" maxlength="24" placeholder="e.g. Sam" />
+      </label>
+
+      <label class="field" id="password-field">
+        <span id="password-label">Password</span>
         <input id="auth-password" type="password" autocomplete="current-password" required />
       </label>
 
@@ -31,15 +38,11 @@
         <input id="auth-password2" type="password" autocomplete="new-password" />
       </label>
 
-      <label class="check">
-        <input id="auth-remember" type="checkbox" checked />
-        <span>Keep me unlocked on this device</span>
-      </label>
-
       <p id="auth-error" class="auth-error" role="alert"></p>
 
       <button id="auth-submit" class="btn primary block" type="submit">Unlock</button>
-      <button id="auth-reset" class="link hidden" type="button">Forgot password? Erase this drive</button>
+      <button id="auth-new" class="link hidden" type="button">Use another account</button>
+      <button id="auth-reset" class="link hidden" type="button">Forgot password?</button>
 
       <p class="auth-foot">
         <span id="auth-build">build</span>
@@ -154,8 +157,6 @@
     </div>
 
     <div id="context-menu" class="popup hidden" role="menu"></div>
-    <div id="dialog" class="dialog-root hidden"></div>
-    <div id="toasts" class="toasts" aria-live="polite"></div>
 
     <div id="preview" class="preview hidden">
       <div class="preview-backdrop" data-preview-close="1"></div>
@@ -183,6 +184,11 @@
       </div>
     </div>
   </div>
+
+  <!-- Dialogs and toasts live outside the app so they also work on the
+       lock screen. -->
+  <div id="dialog" class="dialog-root hidden"></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
 
   <div id="boot-fallback" class="boot-error hidden">
     <h1>Deluxe Drive</h1>
@@ -268,6 +274,6 @@
   </script>
 
   <!-- The ?v= query busts a stale cached copy of the module between deploys. -->
-  <script type="module" src="js/app.js?v=9"></script>
+  <script type="module" src="js/app.js?v=10"></script>
 </body>
 </html>

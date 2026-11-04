@@ -6,7 +6,7 @@ import { officeType, renderOfficePreview, renderDelimited } from './office.js';
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 11';
+const BUILD = 'build 12';
 
 // Tells the lock-screen fallback in index.html that the app really started.
 window.__deluxeDriveStarted = true;
@@ -114,6 +114,7 @@ window.addEventListener('unhandledrejection', (event) => {
 const $ = (selector) => document.querySelector(selector);
 
 const state = {
+  currentUser: null,
   nodes: new Map(),
   view: 'drive', // drive | recent | starred | trash | search
   folderId: null,
@@ -308,7 +309,10 @@ function uniqueName(name, parentId, excludeId = null) {
 
 async function loadNodes() {
   const all = await db.allNodes();
-  state.nodes = new Map(all.map((node) => [node.id, node]));
+  const ownerId = state.currentUser ? state.currentUser.id : null;
+  state.nodes = new Map(
+    all.filter((node) => node.ownerId === ownerId).map((node) => [node.id, node])
+  );
 }
 
 function currentItems() {
@@ -1220,6 +1224,7 @@ async function saveFile(file, parentId) {
   const now = Date.now();
   const node = {
     id,
+    ownerId: state.currentUser ? state.currentUser.id : null,
     parentId,
     type: 'file',
     name: uniqueName(file.name || 'Untitled', parentId),
@@ -1250,6 +1255,7 @@ async function ensureFolder(name, parentId) {
   const now = Date.now();
   const node = {
     id: uid(),
+    ownerId: state.currentUser ? state.currentUser.id : null,
     parentId,
     type: 'folder',
     name: uniqueName(name, parentId),
@@ -1322,6 +1328,7 @@ async function createFolderFlow() {
   const now = Date.now();
   const node = {
     id: uid(),
+    ownerId: state.currentUser ? state.currentUser.id : null,
     parentId,
     type: 'folder',
     name: uniqueName(name, parentId),
@@ -1387,7 +1394,7 @@ async function changePasswordFlow() {
 
   let valid = false;
   try {
-    valid = await auth.verify(current);
+    valid = await auth.verifyUser(state.currentUser ? state.currentUser.id : '', current);
   } catch (error) {
     toast(error.message);
     return;
@@ -1410,27 +1417,29 @@ async function changePasswordFlow() {
     return;
   }
 
-  await auth.changePassword(current, next);
+  await auth.changePassword(state.currentUser ? state.currentUser.id : '', current, next);
   toast('Password updated');
 }
 
 async function resetDrive() {
+  if (!state.currentUser) return;
+
   const sure = await showDialog({
-    title: 'Erase everything?',
-    message: 'Every file, folder and the password stored on this device will be deleted. This cannot be undone.',
-    confirmLabel: 'Erase drive',
+    title: 'Erase my files?',
+    message: `Every file and folder in ${state.currentUser.name}'s drive will be deleted from this device. The account and its password stay.`,
+    confirmLabel: 'Erase my files',
     danger: true,
   });
   if (!sure) return;
 
-  await db.clearAll();
-  auth.forget();
-  await auth.destroyAccount();
-  location.reload();
+  await deleteNodesOfUser(state.currentUser.id);
+  await loadNodes();
+  render();
+  toast('Your drive is empty');
 }
 
 function lockDrive() {
-  auth.forget();
+  auth.forgetSession();
   location.reload();
 }
 
@@ -1532,7 +1541,7 @@ function bindUI() {
       [
         { action: 'password', label: 'Change password', icon: 'lock' },
         { action: 'lock', label: 'Lock drive', icon: 'logout' },
-        { action: 'reset', label: 'Erase everything', icon: 'trash', danger: true },
+        { action: 'reset', label: 'Erase my files', icon: 'trash', danger: true },
       ],
       (action) => {
         if (action === 'password') changePasswordFlow();
@@ -1698,9 +1707,19 @@ function bindUI() {
 /* Boot                                                                */
 /* ------------------------------------------------------------------ */
 
-async function enterApp() {
+async function enterApp(user) {
+  state.currentUser = user;
+  state.view = 'drive';
+  state.folderId = null;
+  state.query = '';
+  state.nodes = new Map();
+  auth.forgetSession();
+
   $('#auth').classList.add('hidden');
   $('#app').classList.remove('hidden');
+
+  const avatar = $('#account-btn');
+  if (avatar) avatar.textContent = (user && user.name ? user.name.charAt(0) : 'D').toUpperCase();
 
   // Wire the UI first, so a storage hiccup can never leave the app with
   // dead buttons: the user still gets a working (empty) drive plus a toast.
@@ -1717,87 +1736,244 @@ async function enterApp() {
   render();
 }
 
+// Files from the old single-account version have no owner yet. Only the
+// account carried over from that version may claim them.
+async function adoptOwnerlessNodes(userId) {
+  if (userId !== 'u_legacy') return;
+
+  const all = await db.allNodes();
+  const orphans = all.filter((node) => !node.ownerId);
+  for (const node of orphans) {
+    node.ownerId = userId;
+    await db.putNode(node);
+  }
+}
+
+async function deleteNodesOfUser(userId) {
+  const all = await db.allNodes();
+  const mine = all.filter((node) => node.ownerId === userId);
+
+  for (const node of mine) {
+    await db.deleteNode(node.id);
+    await db.deleteBlob(node.id);
+    const url = objUrls.get(node.id);
+    if (url) {
+      URL.revokeObjectURL(url);
+      objUrls.delete(node.id);
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Accounts on this device                                             */
+/* ------------------------------------------------------------------ */
+
+let authUsers = [];
+let authMode = 'pick'; // pick | unlock | create
+let authUserId = null;
+
 async function initAuthScreen() {
   const buildNode = $('#auth-build');
   if (buildNode) buildNode.textContent = BUILD;
 
-  const exists = await auth.hasAccount();
+  authUsers = await auth.listUsers();
 
-  $('#auth-sub').textContent = exists
-    ? 'Enter your password to unlock your drive.'
-    : 'Set a password to protect this drive. Everything stays on this device.';
-  $('#pw2-field').classList.toggle('hidden', exists);
-  $('#auth-submit').textContent = exists ? 'Unlock' : 'Create drive';
-  $('#auth-reset').classList.toggle('hidden', !exists);
-  if (exists) $('#auth-remember').checked = auth.wasRemembered();
+  if (!authUsers.length) {
+    authMode = 'create';
+    authUserId = null;
+  } else if (authUsers.length === 1) {
+    authMode = 'unlock';
+    authUserId = authUsers[0].id;
+  } else {
+    authMode = 'pick';
+    authUserId = null;
+  }
 
-  $('#auth-password').focus();
+  renderAuthScreen();
+}
+
+function renderAuthScreen() {
+  const list = $('#auth-users');
+  const nameField = $('#name-field');
+  const password2Field = $('#pw2-field');
+  const submit = $('#auth-submit');
+  const newButton = $('#auth-new');
+  const resetButton = $('#auth-reset');
+  const passwordLabel = $('#password-label');
+  const sub = $('#auth-sub');
+
+  const creating = authMode === 'create';
+  const selected = authUsers.find((user) => user.id === authUserId) || null;
+
+  list.innerHTML = authUsers
+    .map(
+      (user) => `
+      <button class="user-chip${user.id === authUserId ? ' active' : ''}" type="button" data-user="${user.id}">
+        <span class="user-chip-avatar">${escapeHtml(user.name.slice(0, 1).toUpperCase())}</span>
+        <span class="user-chip-name">${escapeHtml(user.name)}</span>
+      </button>`
+    )
+    .join('');
+  list.classList.toggle('hidden', !authUsers.length || creating);
+
+  nameField.classList.toggle('hidden', !creating);
+  password2Field.classList.toggle('hidden', !creating);
+
+  // While choosing between accounts there is no password to type yet.
+  const picking = authMode === 'pick';
+  $('#password-field').classList.toggle('hidden', picking);
+  submit.classList.toggle('hidden', picking);
+
+  passwordLabel.textContent = creating
+    ? 'Choose a password'
+    : selected
+      ? `Password for ${selected.name}`
+      : 'Password';
+
+  submit.textContent = creating ? 'Create account' : 'Unlock';
+
+  newButton.classList.toggle('hidden', creating && !authUsers.length);
+  newButton.textContent = creating
+    ? 'Back to accounts'
+    : picking
+      ? 'Create new account'
+      : 'Use another account';
+
+  resetButton.classList.toggle('hidden', creating || picking || !selected);
+  resetButton.textContent = selected ? `Forgot password? Erase ${selected.name}'s drive` : 'Forgot password?';
+
+  sub.textContent = creating
+    ? 'Create an account on this device. Each account has its own password and its own files.'
+    : selected
+      ? 'Enter your password to open this drive.'
+      : 'Choose an account, or create a new one.';
+
+  $('#auth-password').value = '';
+  $('#auth-password2').value = '';
+  $('#auth-name').value = '';
+  $('#auth-error').textContent = '';
+
+  if (creating) $('#auth-name').focus();
+  else $('#auth-password').focus();
 }
 
 function bindAuthScreen() {
+  $('#auth-users').addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-user]');
+    if (!chip) return;
+    authUserId = chip.dataset.user;
+    authMode = 'unlock';
+    renderAuthScreen();
+  });
+
+  $('#auth-new').addEventListener('click', () => {
+    if (authMode === 'create') {
+      if (authUsers.length === 1) {
+        authMode = 'unlock';
+        authUserId = authUsers[0].id;
+      } else {
+        authMode = 'pick';
+        authUserId = null;
+      }
+    } else if (authMode === 'pick') {
+      authMode = 'create';
+      authUserId = null;
+    } else {
+      authMode = 'pick';
+      authUserId = null;
+    }
+    renderAuthScreen();
+  });
+
+  $('#auth-reset').addEventListener('click', async () => {
+    const user = authUsers.find((entry) => entry.id === authUserId);
+    if (!user) return;
+
+    const sure = await showDialog({
+      title: `Erase ${user.name}'s drive?`,
+      message:
+        'This deletes that account and every file in it from this device. A forgotten password cannot be recovered.',
+      confirmLabel: 'Erase account',
+      danger: true,
+    });
+    if (!sure) return;
+
+    await deleteNodesOfUser(user.id);
+    await auth.removeUser(user.id);
+    authUserId = null;
+    await initAuthScreen();
+    toast(`${user.name}'s drive was erased`);
+  });
+
   $('#auth-form').addEventListener('submit', async (event) => {
     event.preventDefault();
 
-    const password = $('#auth-password').value;
     const error = $('#auth-error');
     const submit = $('#auth-submit');
-    const remember = $('#auth-remember').checked;
-    $('#auth-error').textContent = '';
+    const password = $('#auth-password').value;
+    error.textContent = '';
 
-    let exists = false;
-    try {
-      exists = await auth.hasAccount();
-    } catch (error_) {
-      $('#auth-error').textContent = error_.message;
-      return;
-    }
-
-    if (!exists) {
+    if (authMode === 'create') {
+      const name = $('#auth-name').value.trim();
       const confirmPassword = $('#auth-password2').value;
+
+      if (!name) {
+        error.textContent = 'Give this account a name.';
+        return;
+      }
       if (password.length < 4) {
-        $('#auth-error').textContent = 'Use at least 4 characters.';
+        error.textContent = 'Use at least 4 characters.';
         return;
       }
       if (password !== confirmPassword) {
-        $('#auth-error').textContent = 'Passwords do not match.';
+        error.textContent = 'Passwords do not match.';
         return;
       }
+
       submit.disabled = true;
       try {
-        await auth.createAccount(password);
-        await auth.remember(remember);
+        const user = await auth.createUser(name, password);
+        await adoptOwnerlessNodes(user.id);
         submit.disabled = false;
-        await enterApp();
-        toast('Drive created and unlocked');
+        await enterApp(user);
+        toast(`Welcome, ${user.name}`);
       } catch (error_) {
         submit.disabled = false;
-        $('#auth-error').textContent = error_.message || 'Could not create the drive.';
+        error.textContent = error_.message || 'Could not create the account.';
       }
+      return;
+    }
+
+    if (authMode === 'pick') {
+      error.textContent = 'Choose an account above, or create a new one.';
+      return;
+    }
+
+    const user = authUsers.find((entry) => entry.id === authUserId);
+    if (!user) {
+      error.textContent = 'Choose an account.';
       return;
     }
 
     submit.disabled = true;
     try {
-      const ok = await auth.verify(password);
+      const ok = await auth.verifyUser(user.id, password);
       submit.disabled = false;
       if (!ok) {
-        $('#auth-error').textContent = 'Wrong password. Try again.';
+        error.textContent = 'Wrong password. Try again.';
         $('#auth-password').select();
         return;
       }
-      await auth.remember(remember);
-      await enterApp();
+      await adoptOwnerlessNodes(user.id);
+      await enterApp(user);
     } catch (error_) {
       submit.disabled = false;
-      $('#auth-error').textContent = error_.message || 'Could not unlock the drive.';
+      error.textContent = error_.message || 'Could not unlock the drive.';
     }
   });
 
-  $('#auth-reset').addEventListener('click', resetDrive);
-
-  // Clear a previous error as soon as the user starts correcting the input,
-  // so an old "Passwords do not match" never sits there while typing.
-  ['#auth-password', '#auth-password2'].forEach((selector) => {
+  // Clear a previous error as soon as the user starts correcting the input.
+  ['#auth-password', '#auth-password2', '#auth-name'].forEach((selector) => {
     const field = $(selector);
     if (!field) return;
     field.addEventListener('input', () => {
@@ -1815,25 +1991,14 @@ async function boot() {
   try {
     await openDB();
 
-    stage = 'setting up the password screen';
+    stage = 'reading the accounts on this device';
+    await auth.migrateLegacyAccount();
+    auth.forgetSession();
+
+    stage = 'setting up the account screen';
     bindAuthScreen();
 
-    stage = 'checking whether this device is unlocked';
-    let unlocked = false;
-    try {
-      unlocked = await auth.tryRestore();
-    } catch (error) {
-      console.warn('Could not restore the remembered unlock', error);
-      unlocked = false;
-    }
-
-    if (unlocked) {
-      stage = 'opening your drive';
-      await enterApp();
-      return;
-    }
-
-    stage = 'reading the saved password';
+    stage = 'showing the accounts';
     await initAuthScreen();
   } catch (error) {
     showBootFailure(stage, error);

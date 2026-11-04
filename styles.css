@@ -1526,3 +1526,58 @@ button {
     transform: none;
   }
 }
+
+
+/* ---------------- Accounts on the lock screen ---------------- */
+
+.user-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 2px 0 4px;
+}
+
+.user-chip {
+  flex: 1 1 auto;
+  min-width: 132px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 13.5px;
+  text-align: left;
+}
+
+.user-chip:hover {
+  border-color: var(--accent);
+}
+
+.user-chip.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.user-chip-avatar {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #4f46e5, #14b8a6);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.user-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

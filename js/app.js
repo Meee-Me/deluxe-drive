@@ -1,12 +1,12 @@
 import { db, openDB } from './db.js';
 import * as auth from './auth.js';
 import { icon, escapeHtml, formatBytes, formatDate, formatDateTime, showDialog, toast } from './ui.js';
-import { officeType, renderOfficePreview, renderDelimited } from './office.js';
+import { officeType, renderOfficePreview, renderDelimited, renderDocxFaithful } from './office.js';
 
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 13';
+const BUILD = 'build 14';
 
 // Tells the lock-screen fallback in index.html that the app really started.
 window.__deluxeDriveStarted = true;
@@ -1148,8 +1148,18 @@ async function openPreview(node) {
   } else if (kind === 'pdf') {
     body.innerHTML = `<iframe class="preview-frame" src="${url}" title="${escapeHtml(node.name)}"></iframe>`;
   } else if (officeType(node.name)) {
-    // Word, Excel and PowerPoint (and OpenDocument) files are ZIPs of XML:
-    // office.js unpacks them and returns readable HTML.
+    // Word documents are laid out properly by docx-preview (pages, tables,
+    // images, fonts). Everything else is read from its XML by office.js.
+    if (officeType(node.name) === 'docx') {
+      const holder = document.createElement('div');
+      holder.className = 'docx-holder';
+      body.innerHTML = '';
+      body.appendChild(holder);
+
+      const laidOut = await renderDocxFaithful(blob, holder);
+      if (laidOut) return;
+    }
+
     try {
       body.innerHTML = await renderOfficePreview(node.name, blob);
     } catch (error) {

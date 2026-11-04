@@ -1761,3 +1761,38 @@ button {
   background: transparent;
   font-weight: 400;
 }
+
+
+/* ---------------- Faithful Word preview (docx-preview) ---------------- */
+
+.docx-holder {
+  width: 100%;
+  height: 100%;
+  align-self: stretch;
+  overflow: auto;
+  display: block;
+}
+
+/* docx-preview paints its wrapper grey with inline styles; higher
+   specificity here keeps the pages looking like paper in either theme. */
+.docx-holder .docx-wrapper {
+  background: var(--surface-2);
+  padding: 20px 16px;
+  display: flex;
+  flex-flow: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.docx-holder .docx-wrapper > section.docx {
+  background: #ffffff;
+  color: #1f1f1f;
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12), 0 10px 30px rgba(15, 23, 42, 0.12);
+  margin-bottom: 0;
+  max-width: 100%;
+}
+
+.docx-holder .docx-wrapper > section.docx table {
+  max-width: 100%;
+}

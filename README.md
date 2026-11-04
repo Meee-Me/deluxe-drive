@@ -12,10 +12,12 @@ Google: your files live in this browser's IndexedDB, behind a password you choos
 - **Folders and files** — upload any file type (single, multiple, whole folders), create folders,
   rename, move, star, delete to trash, restore, delete forever, empty trash.
 - **Views** — My Drive with breadcrumbs, Recent, Starred, Trash, and full-name search.
-- **Previews** — images, video, audio and PDF open inline; Word (`.docx`), Excel (`.xlsx`),
-  OpenDocument (`.odt`, `.ods`, `.odp`) and Rich Text (`.rtf`) files are unpacked and read in the
-  browser; PowerPoint (`.pptx`) opens as a slide deck — white 16:9 pages you flip through with a
-  slide counter — and CSV/TSV open as tables; plain text and code are shown as text. Anything else
+- **Previews** — images, video, audio and PDF open inline (PDF exactly, since the browser draws
+  it). Word (`.docx`) is laid out as real pages with the vendored `docx-preview` library — tables,
+  images, headings and fonts intact; Excel (`.xlsx`), OpenDocument (`.odt`, `.ods`, `.odp`) and
+  Rich Text (`.rtf`) are read in the browser, spreadsheets with column letters, row numbers and
+  sticky headers; PowerPoint (`.pptx`) opens as a slide deck at the deck's own aspect ratio with a
+  slide counter; CSV/TSV open as tables; plain text and code are shown as text. Anything else
   offers a download.
 - **Select mode** — select several items and download, star, move or delete them together, plus
   a details panel and next/previous navigation inside the preview.
@@ -32,6 +34,7 @@ index.html      markup for the lock screen and the app shell
 styles.css      all styling, including dark mode and mobile drawer
 js/app.js       app state, rendering, file actions, previews, uploads
 js/office.js    reads .docx / .xlsx / .pptx / .odt / .ods / .odp / .rtf in the browser
+vendor/         pinned docx-preview + JSZip builds used for faithful .docx layout
 js/db.js        IndexedDB layer (nodes / blobs / settings stores)
 js/auth.js      password hashing, unlock session
 js/ui.js        icons, formatting, toasts, modal dialogs

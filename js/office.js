@@ -528,3 +528,72 @@ export async function renderOfficePreview(name, blob) {
 
   return renderOpenDocument(archive, type);
 }
+
+
+/* ------------------------------------------------------------------ */
+/* Faithful Word rendering (vendored docx-preview)                     */
+/* ------------------------------------------------------------------ */
+
+// docx-preview draws the real document: pages, tables, images, headings and
+// fonts. It is ~170 KB of library, so the two scripts are fetched only when a
+// Word file is actually opened, and any failure falls back to the plain-text
+// reader above rather than leaving the preview empty.
+let docxLibraries = null;
+
+function loadScript(source) {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[data-dd-vendor="${source}"]`);
+    if (existing) {
+      resolve();
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = source;
+    script.async = true;
+    script.dataset.ddVendor = source;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Could not load the document renderer'));
+    document.head.appendChild(script);
+  });
+}
+
+async function ensureDocxLibraries() {
+  if (docxLibraries) return docxLibraries;
+
+  docxLibraries = (async () => {
+    const base = new URL('../vendor/', import.meta.url);
+    await loadScript(new URL('jszip.min.js', base).href);
+    await loadScript(new URL('docx-preview.min.js', base).href);
+  })();
+
+  return docxLibraries;
+}
+
+export async function renderDocxFaithful(blob, container) {
+  try {
+    await ensureDocxLibraries();
+  } catch (error) {
+    return false;
+  }
+
+  if (!window.JSZip || !window.docx || typeof window.docx.renderAsync !== 'function') return false;
+
+  try {
+    container.innerHTML = '';
+    await window.docx.renderAsync(blob, container, null, {
+      className: 'docx',
+      inWrapper: true,
+      ignoreWidth: false,
+      ignoreHeight: false,
+      breakPages: true,
+      renderHeaders: true,
+      renderFooters: true,
+      useBase64URL: true,
+    });
+    return true;
+  } catch (error) {
+    console.warn('docx-preview could not lay out this document', error);
+    return false;
+  }
+}

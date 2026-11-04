@@ -6,7 +6,7 @@ import { officeType, renderOfficePreview, renderDelimited, renderDocxFaithful } 
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 17';
+const BUILD = 'build 18';
 
 // Tells the lock-screen fallback in index.html that the app really started.
 window.__deluxeDriveStarted = true;
@@ -1454,6 +1454,76 @@ function lockDrive() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Credits                                                             */
+/* ------------------------------------------------------------------ */
+
+const CREDITS_SITES = [
+  {
+    name: 'YouTube Guider AI',
+    url: 'https://youtube-guide-ai.netlify.app/',
+    label: 'youtube-guide-ai.netlify.app',
+  },
+  {
+    name: 'Deluxe Convert',
+    url: 'https://deluxe-convert-cloud.deluxelordd.workers.dev',
+    label: 'deluxe-convert-cloud.deluxelordd.workers.dev',
+  },
+  {
+    name: 'Deluxe Translate',
+    url: 'https://deluxe-translate-8m27.netlify.app/',
+    label: 'deluxe-translate-8m27.netlify.app',
+  },
+];
+
+function showCredits() {
+  const root = $('#dialog');
+  if (!root) return;
+
+  const links = CREDITS_SITES.map(
+    (site) => `
+      <a class="credit-link" href="${site.url}" target="_blank" rel="noopener">
+        <span class="credit-link-name">${escapeHtml(site.name)}</span>
+        <span class="credit-link-url">${escapeHtml(site.label)}</span>
+      </a>`
+  ).join('');
+
+  root.innerHTML = `
+    <div class="dialog-backdrop" data-close="1"></div>
+    <div class="dialog credits-dialog" role="dialog" aria-modal="true" aria-label="Credits">
+      <div class="credits-head">
+        <img src="icon.svg" alt="" width="48" height="48" />
+        <div>
+          <h2>Deluxe Drive</h2>
+          <p class="credits-tagline">Your drive, in the browser.</p>
+        </div>
+      </div>
+
+      <div class="credits-list">
+        <div class="credit-row"><span>Directed by</span><b>Shivad Sujith</b></div>
+        <div class="credit-row"><span>AI support</span><b>Claude</b></div>
+        <div class="credit-row"><span>Built with</span><b>FreeMilk</b></div>
+        <div class="credit-row"><span>Powered by</span><b>Netlify</b></div>
+      </div>
+
+      <h3 class="credits-sub">More from Deluxe Lord</h3>
+      <div class="credits-links">${links}</div>
+
+      <div class="dialog-actions">
+        <button class="btn primary" type="button" data-action="close">Close</button>
+      </div>
+    </div>`;
+  root.classList.remove('hidden');
+
+  const close = () => {
+    root.classList.add('hidden');
+    root.innerHTML = '';
+  };
+
+  root.querySelector('[data-close]').addEventListener('click', close);
+  root.querySelector('[data-action="close"]').addEventListener('click', close);
+}
+
+/* ------------------------------------------------------------------ */
 /* Event wiring                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -1550,11 +1620,13 @@ function bindUI() {
       event.currentTarget,
       [
         { action: 'password', label: 'Change password', icon: 'lock' },
+        { action: 'credits', label: 'Credits', icon: 'info' },
         { action: 'lock', label: 'Lock drive', icon: 'logout' },
         { action: 'reset', label: 'Erase my files', icon: 'trash', danger: true },
       ],
       (action) => {
         if (action === 'password') changePasswordFlow();
+        else if (action === 'credits') showCredits();
         else if (action === 'lock') lockDrive();
         else if (action === 'reset') resetDrive();
       }
@@ -1857,6 +1929,8 @@ function renderAuthScreen() {
 }
 
 function bindAuthScreen() {
+  $('#auth-credits').addEventListener('click', showCredits);
+
   $('#auth-switch').addEventListener('click', () => {
     authHintId = null;
     try {

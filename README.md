@@ -43,6 +43,14 @@ js/auth.js      password hashing, unlock session
 js/ui.js        icons, formatting, toasts, modal dialogs
 ```
 
+## Credits
+
+Directed by **Shivad Sujith**. AI support: **Claude**. Built with **FreeMilk**. Powered by
+**Netlify**. Other sites by Deluxe Lord — [YouTube Guider AI](https://youtube-guide-ai.netlify.app/),
+[Deluxe Convert](https://deluxe-convert-cloud.deluxelordd.workers.dev),
+[Deluxe Translate](https://deluxe-translate-8m27.netlify.app/). The same list is in the app: the
+**credits** link on the lock screen, or **Credits** in the account menu.
+
 ## Data notes
 
 - Files are stored as Blobs in IndexedDB, so the browser's storage limit (often several GB) is the

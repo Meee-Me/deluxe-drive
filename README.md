@@ -22,6 +22,14 @@ Google: your files live in this browser's IndexedDB, behind a password you choos
   the deck's font sizes and colours, images, solid fills and tables, on a canvas at the deck's exact
   aspect ratio; CSV/TSV open as tables; plain text and code are shown as text. Anything else offers
   a download.
+- **Zoom and every page** — PDF, Word, PowerPoint, Excel (and OpenDocument / RTF / CSV) previews
+  show **all** pages, slides or sheets in one scrolling view. Zoom 25%–400% with the − / + buttons,
+  **Fit width**, `+` `-` `0` on the keyboard, Ctrl/⌘ + mouse wheel (or a trackpad pinch), or a
+  two-finger pinch on a phone. A **Page / Slide / Sheet** box shows where you are and jumps to any
+  number. PDFs are drawn by a bundled copy of PDF.js (rendered sharply at each zoom level); if it
+  cannot load, the browser's own PDF viewer is used instead.
+- **More websites** — a button in the top bar (and a link on the lock screen) opens a list of the
+  other Deluxe Lord sites: YouTube Guider AI, Deluxe Convert and Deluxe Translate.
 - **Select mode** — select several items and download, star, move or delete them together, plus
   a details panel and next/previous navigation inside the preview.
 - **Grid and list layouts**, sorting by name / last modified / size, storage usage meter, light and
@@ -37,7 +45,8 @@ index.html      markup for the lock screen and the app shell
 styles.css      all styling, including dark mode and mobile drawer
 js/app.js       app state, rendering, file actions, previews, uploads
 js/office.js    reads .docx / .xlsx / .pptx / .odt / .ods / .odp / .rtf in the browser
-vendor/         pinned docx-preview + JSZip builds used for faithful .docx layout
+js/viewer.js    zoom controls, pinch / Ctrl+wheel, page box, and the all-pages PDF renderer
+vendor/         pinned docx-preview + JSZip (faithful .docx) and PDF.js (PDF pages) builds
 js/db.js        IndexedDB layer (nodes / blobs / settings stores)
 js/auth.js      password hashing, unlock session
 js/ui.js        icons, formatting, toasts, modal dialogs

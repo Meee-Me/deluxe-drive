@@ -8,7 +8,7 @@ import { mountPdf, mountScaled, closeViewer } from './viewer.js';
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 29';
+const BUILD = 'build 30';
 
 // The drive keeps its files in this browser's IndexedDB, or - when the page is
 // served by the Deluxe Drive server - on that server, under the signed-in
@@ -1827,6 +1827,31 @@ function showCredits() {
 // Connect the documents app: the drive registers it as an OAuth viewer and
 // hands it a share link for each document opened here. Sign-in for the viewer
 // happens on Deluxe Drive's own pages, so its password never leaves this site.
+// "Link for Deluxe Docs" in the account menu: copy the connection link this
+// account's Docs app pastes, making one first if there is none.
+async function copyDocsLink() {
+  if (!cloud.isOnline()) {
+    toast('Deluxe Docs needs the Deluxe Drive server.');
+    showDocsDialog();
+    return;
+  }
+
+  if (!cloud.docsSettings().url) {
+    toast('Connect Deluxe Docs first — paste its address in the box.');
+    showDocsDialog();
+    return;
+  }
+
+  try {
+    const saved = await cloud.docsLink();
+    if (!saved.link) throw new Error('Could not make the link. Press Connect again.');
+    await copyText(saved.link);
+    toast('Connection link copied');
+  } catch (error) {
+    toast(error.message || 'Could not copy the connection link');
+  }
+}
+
 function showDocsDialog() {
   const root = $('#dialog');
   if (!root) return;
@@ -1864,22 +1889,33 @@ function showDocsDialog() {
           placeholder="https://your-drive.freemilk.app" value="${escapeHtml(cloud.savedServer())}" />
       </label>`;
 
-  // Deluxe Docs takes one paste: a connection link that answers with this
-  // drive's endpoints and the client registered for it.
-  const setup =
-    online && settings.url
+  // The link Deluxe Docs pastes. It is shown as its short id, with the whole
+  // link under it, and it can be remade at any time.
+  const linkId = settings.link ? String(settings.link).split('/').pop() : '';
+  const setup = !online
+    ? ''
+    : settings.url
       ? `
       <div class="docs-setup">
-        <p class="docs-setup-id">Connection link${
-          settings.link ? ` <code>${escapeHtml(settings.link)}</code>` : ''
+        <p class="docs-setup-id">Link ID ${
+          linkId ? `<code>${escapeHtml(linkId)}</code>` : '<span class="muted">not made yet</span>'
         }</p>
         <button class="btn ghost" type="button" data-action="copy-link">Copy connection link</button>
+        ${
+          settings.link
+            ? `<p class="docs-setup-link">${escapeHtml(settings.link)}</p>`
+            : ''
+        }
         <p class="docs-setup-hint">
-          Paste it into the Connect box in Deluxe Docs. It carries this drive's address and client;
-          the password is still typed on this drive's own page.
+          Paste that link into the Connect box in Deluxe Docs. It carries this drive's address and
+          this account; the password is still typed on this drive's own page.
         </p>
       </div>`
-      : '';
+      : `
+      <p class="docs-status">
+        Paste the Deluxe Docs page address above and press Connect once — the Link ID for this
+        account appears here.
+      </p>`;
 
   root.innerHTML = `
     <div class="dialog-backdrop" data-close="1"></div>
@@ -2097,8 +2133,10 @@ function showDocsDialog() {
     try {
       const saved = await cloud.connectDocs(pageUrl);
       cloud.saveDocsSettings({ ...saved, autoOpen: autoField ? autoField.checked : true });
-      toast('Deluxe Docs connected');
+      toast('Deluxe Docs connected — the link is below');
+      // Stay on the dialog, so the Link ID it just made is right there to copy.
       close();
+      showDocsDialog();
     } catch (error) {
       let message = (error && error.message) || 'Could not connect Deluxe Docs.';
       if (error && error.status === 401) message = 'Sign in to Deluxe Drive again, then connect Deluxe Docs.';
@@ -2311,6 +2349,9 @@ function bindUI() {
           icon: 'doc',
         },
         ...(cloud.isOnline() ? [{ action: 'shares', label: 'Shared links', icon: 'link' }] : []),
+        ...(cloud.isOnline()
+          ? [{ action: 'docs-link', label: 'Link for Deluxe Docs', icon: 'link' }]
+          : []),
         { action: 'credits', label: 'Credits', icon: 'info' },
         { action: 'lock', label: 'Lock drive', icon: 'logout' },
         { action: 'reset', label: 'Erase my files', icon: 'trash', danger: true },
@@ -2319,6 +2360,7 @@ function bindUI() {
         if (action === 'password') changePasswordFlow();
         else if (action === 'docs') showDocsDialog();
         else if (action === 'shares') showSharesDialog();
+        else if (action === 'docs-link') copyDocsLink();
         else if (action === 'credits') showCredits();
         else if (action === 'lock') lockDrive();
         else if (action === 'reset') resetDrive();

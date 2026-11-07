@@ -1107,6 +1107,13 @@ button {
   color: var(--muted);
 }
 
+.docs-setup-link {
+  margin: 0;
+  font: 12px var(--mono);
+  word-break: break-all;
+  color: var(--muted);
+}
+
 /* Share links */
 
 .card-meta .share-badge {

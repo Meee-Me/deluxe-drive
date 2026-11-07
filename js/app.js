@@ -8,7 +8,7 @@ import { mountPdf, mountScaled, closeViewer } from './viewer.js';
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 23';
+const BUILD = 'build 24';
 
 // The drive keeps its files in this browser's IndexedDB, or - when the page is
 // served by the Deluxe Drive server - on that server, under the signed-in
@@ -1834,6 +1834,10 @@ function showDocsDialog() {
   const online = cloud.isOnline();
   const settings = cloud.docsSettings();
 
+  // The Deluxe Docs page this drive is usually connected to; typing over it is
+  // how another address is registered.
+  const docsDefault = 'https://deluxe-docs.netlify.app';
+
   const status = !online
     ? 'Deluxe Docs needs the Deluxe Drive server, and this copy did not find one (no /api/health answered), so the drive is using this browser’s own storage. Open the drive from its server, then tap Check for server.'
     : settings.url
@@ -1866,7 +1870,7 @@ function showDocsDialog() {
       <label class="docs-field">
         <span>Deluxe Docs page address</span>
         <input id="docs-url" type="url" inputmode="url" autocapitalize="none" autocorrect="off" spellcheck="false"
-          placeholder="https://…" value="${escapeHtml(settings.url)}" />
+          placeholder="https://…" value="${escapeHtml(settings.url || docsDefault)}" />
       </label>
 
       <label class="docs-check">

@@ -8,7 +8,7 @@ import { mountPdf, mountScaled, closeViewer } from './viewer.js';
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 22';
+const BUILD = 'build 23';
 
 // The drive keeps its files in this browser's IndexedDB, or - when the page is
 // served by the Deluxe Drive server - on that server, under the signed-in
@@ -1840,6 +1840,20 @@ function showDocsDialog() {
       ? `Connected to ${settings.url}. The share link needs no sign-in, and Deluxe Docs can only read the files you open.`
       : 'Not connected yet. Paste the Deluxe Docs page address, for example https://deluxe-docs.netlify.app.';
 
+  // Deluxe Docs keeps its Drive sign-in in its own config.js, so the client it
+  // was just registered as has to be copyable from here.
+  const setup =
+    online && settings.clientId
+      ? `
+      <div class="docs-setup">
+        <p class="docs-setup-id">Client ID <code>${escapeHtml(settings.clientId)}</code></p>
+        <button class="btn ghost" type="button" data-action="copy-setup">Copy Docs setup</button>
+        <p class="docs-setup-hint">
+          Paste it into Deluxe Docs’ <code>config.js</code> so that app can sign in to this drive.
+        </p>
+      </div>`
+      : '';
+
   root.innerHTML = `
     <div class="dialog-backdrop" data-close="1"></div>
     <div class="dialog docs-dialog" role="dialog" aria-modal="true" aria-label="Deluxe Docs">
@@ -1861,6 +1875,7 @@ function showDocsDialog() {
       </label>
 
       <p id="docs-status" class="docs-status">${escapeHtml(status)}</p>
+      ${setup}
 
       <div class="dialog-actions">
         ${
@@ -1919,8 +1934,15 @@ function showDocsDialog() {
     });
   }
 
-  const openDocsButton = root.querySelector('[data-action="open-docs"]');
-  if (openDocsButton) {
+  const copySetup = root.querySelector('[data-action="copy-setup"]');
+  if (copySetup) {
+    copySetup.addEventListener('click', async () => {
+      await copyText(JSON.stringify(cloud.docsConfig(), null, 2));
+      toast('Deluxe Docs setup copied');
+    });
+  }
+
+  const openDocsButton = root.querySelector('[data-action="open-docs"]');  if (openDocsButton) {
     openDocsButton.addEventListener('click', () => {
       window.open(settings.url, '_blank', 'noopener');
     });

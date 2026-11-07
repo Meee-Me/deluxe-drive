@@ -84,9 +84,13 @@ Deluxe Docs is a separate site. To connect it:
 1. Start Deluxe Drive with its server (so `/api/health` answers).
 2. In the drive, open the account menu (the avatar) → **Connect Deluxe Docs**.
 3. Paste the Deluxe Docs page address (`https://…`). The drive registers it as an OAuth client.
-4. Open a document in the drive. The file is shared and Deluxe Docs is opened at
-   `…?file=<share link>&name=<file name>`.
-5. Those links show up under **Shared links** in the account menu, where any of them can be copied
+4. **Copy Docs setup** in the same dialog copies that client's settings; paste them into Deluxe
+   Docs' `config.js` (`driveUrl`, `authorizeUrl`, `tokenUrl`, `userInfoUrl`, `clientId`). Without
+   that, the viewer shows its setup notice and cannot sign in.
+5. Open a document in the drive. The file is shared and Deluxe Docs is opened at
+   `…?url=<share link>&name=<file name>` — `url` is the name Deluxe Docs reads, `name` sets the tab
+   title.
+6. Those links show up under **Shared links** in the account menu, where any of them can be copied
    again or stopped for everyone.
 
 Sign-in for Deluxe Docs happens on Deluxe Drive's own pages, so the drive password is typed into

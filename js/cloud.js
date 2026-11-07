@@ -435,7 +435,9 @@ function viewerUrl(fileUrl, name) {
     return null;
   }
 
-  target.searchParams.set('file', fileUrl);
+  // Deluxe Docs reads the file's direct link from `url` (its own README says
+  // `?url=`); `name` only sets the tab's title.
+  target.searchParams.set('url', fileUrl);
   if (name) target.searchParams.set('name', name);
   return target.toString();
 }

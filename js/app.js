@@ -1,12 +1,39 @@
-import { db, openDB } from './db.js';
+import { db as localDb, openDB } from './db.js';
 import * as auth from './auth.js';
+import * as cloud from './cloud.js';
 import { icon, escapeHtml, formatBytes, formatDate, formatDateTime, showDialog, toast } from './ui.js';
 import { officeType, renderOfficePreview, renderDelimited, renderDocxFaithful } from './office.js';
 
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 18';
+const BUILD = 'build 21';
+
+// The drive keeps its files in this browser's IndexedDB, or - when the page is
+// served by the Deluxe Drive server - on that server, under the signed-in
+// account's token, so the same drive opens on every device. Both answer these
+// calls the same way, so the rest of the app never has to ask which one it is.
+function activeStore() {
+  return cloud.isOnline() ? cloud.remote : localDb;
+}
+
+const db = {
+  allNodes: () => activeStore().allNodes(),
+  getNode: (id) => activeStore().getNode(id),
+  putNode: (node) => activeStore().putNode(node),
+  putNodes: (nodes) => activeStore().putNodes(nodes),
+  deleteNode: (id) => activeStore().deleteNode(id),
+
+  getBlob: (id) => activeStore().getBlob(id),
+  putBlob: (id, blob) => activeStore().putBlob(id, blob),
+  deleteBlob: (id) => activeStore().deleteBlob(id),
+
+  getSetting: (key) => activeStore().getSetting(key),
+  putSetting: (key, value) => activeStore().putSetting(key, value),
+  deleteSetting: (key) => activeStore().deleteSetting(key),
+
+  clearAll: () => activeStore().clearAll(),
+};
 
 // Tells the lock-screen fallback in index.html that the app really started.
 window.__deluxeDriveStarted = true;
@@ -66,7 +93,7 @@ function reportCrash(message) {
 // Only errors raised by this app's own files are worth showing to the user.
 // Browser extensions (crypto wallets inject `window.ethereum`, for example)
 // throw constantly on every page, and catching those made the app look broken.
-const OUR_SCRIPTS = ['/js/app.js', '/js/db.js', '/js/auth.js', '/js/ui.js'];
+const OUR_SCRIPTS = ['/js/app.js', '/js/db.js', '/js/auth.js', '/js/ui.js', '/js/cloud.js'];
 
 function fromThisApp(text) {
   const value = String(text || '');
@@ -130,6 +157,7 @@ const state = {
   previewIndex: -1,
   selectMode: false,
   selected: new Set(),
+  shared: new Set(), // node ids with a share link (server drives only)
 };
 
 const objUrls = new Map(); // nodeId -> object URL (thumbnails and previews)
@@ -315,6 +343,22 @@ async function loadNodes() {
   );
 }
 
+// Which files have a share link, so a card can show it and its menu can stop
+// it. A drive without a server has no links to show.
+async function refreshShares() {
+  if (!cloud.isOnline()) {
+    state.shared = new Set();
+    return;
+  }
+
+  try {
+    const shares = await cloud.listShares();
+    state.shared = new Set(shares.map((share) => share.fileId).filter(Boolean));
+  } catch (error) {
+    state.shared = new Set();
+  }
+}
+
 function currentItems() {
   const all = [...state.nodes.values()];
 
@@ -357,6 +401,9 @@ function cardHtml(node, counts) {
   const isFolder = node.type === 'folder';
   const kind = isFolder ? 'folder' : fileKind(node.mime, node.name);
   const star = node.starred ? `<span class="star-badge">${icon('star')}</span>` : '';
+  const shared = state.shared.has(node.id)
+    ? `<span class="share-badge" title="Shared with a link">${icon('link')}</span>`
+    : '';
   const selected = state.selectMode && state.selected.has(node.id);
   const badge = selected ? `<span class="select-badge">${icon('check')}</span>` : '';
 
@@ -379,7 +426,7 @@ function cardHtml(node, counts) {
       <div class="card-thumb ${kind}" data-thumb="${node.id}">${icon(iconForKind(kind))}</div>
       <div class="card-body">
         <p class="card-name" title="${escapeHtml(node.name)}">${escapeHtml(node.name)}</p>
-        <p class="card-meta">${escapeHtml(meta)}</p>
+        <p class="card-meta">${shared}${escapeHtml(meta)}</p>
       </div>
       ${star}
       ${badge}
@@ -456,8 +503,10 @@ async function renderStorage() {
     .filter((node) => node.type === 'file')
     .reduce((sum, node) => sum + (node.size || 0), 0);
 
+  // On the server there is no browser quota to show: the figure is simply
+  // what this account is storing there.
   let quota = 0;
-  if (navigator.storage && navigator.storage.estimate) {
+  if (!cloud.isOnline() && navigator.storage && navigator.storage.estimate) {
     try {
       const estimate = await navigator.storage.estimate();
       quota = estimate.quota || 0;
@@ -590,7 +639,16 @@ function openNodeMenu(id, anchor) {
     items.push({ action: 'restore', label: 'Restore', icon: 'restore' });
     items.push({ action: 'delete-forever', label: 'Delete forever', icon: 'trash', danger: true });
   } else {
-    if (node.type === 'file') items.push({ action: 'download', label: 'Download', icon: 'download' });
+    if (node.type === 'file') {
+      items.push({ action: 'download', label: 'Download', icon: 'download' });
+      if (cloud.isOnline()) {
+        items.push({ action: 'share', label: 'Copy share link', icon: 'link' });
+        if (state.shared.has(node.id)) {
+          items.push({ action: 'unshare', label: 'Stop sharing', icon: 'close' });
+        }
+      }
+      if (cloud.docsReady()) items.push({ action: 'docs', label: 'Open in Deluxe Docs', icon: 'doc' });
+    }
     items.push({
       action: 'star',
       label: node.starred ? 'Remove from starred' : 'Add to starred',
@@ -611,6 +669,21 @@ async function performNodeAction(action, id) {
 
   if (action === 'download') {
     downloadNode(node);
+    return;
+  }
+
+  if (action === 'docs') {
+    openInDocs(node);
+    return;
+  }
+
+  if (action === 'share') {
+    await shareNode(node);
+    return;
+  }
+
+  if (action === 'unshare') {
+    await unshareNode(node);
     return;
   }
 
@@ -734,6 +807,56 @@ async function downloadNode(node) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
+// A link anyone can open, with no sign-in: the server serves that one file.
+async function shareNode(node) {
+  try {
+    const share = await cloud.shareFile(node.id);
+    state.shared.add(node.id);
+    render();
+    await copyText(share.url);
+    toast('Share link copied');
+  } catch (error) {
+    toast(error.message || 'That file could not be shared');
+  }
+}
+
+async function unshareNode(node) {
+  try {
+    await cloud.stopSharing(node.id);
+    state.shared.delete(node.id);
+    render();
+    toast('Share link stopped');
+  } catch (error) {
+    toast(error.message || 'That link could not be stopped');
+  }
+}
+
+async function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (error) {
+      /* fall through to the old way */
+    }
+  }
+
+  const field = document.createElement('textarea');
+  field.value = text;
+  field.setAttribute('readonly', '');
+  field.style.position = 'fixed';
+  field.style.opacity = '0';
+  document.body.appendChild(field);
+  field.select();
+  try {
+    document.execCommand('copy');
+  } catch (error) {
+    /* nothing else to try */
+  }
+  field.remove();
+  return true;
+}
+
 function pickFolder(node) {
   return new Promise((resolve) => {
     const root = $('#dialog');
@@ -802,7 +925,33 @@ function openNode(id) {
     return;
   }
 
+  // A connected Deluxe Docs is the viewer for documents: opening one hands
+  // the file over to it instead of drawing it here.
+  if (cloud.docsReady() && cloud.docsSettings().autoOpen && isDocument(node) && node.size > 0) {
+    openInDocs(node);
+    return;
+  }
+
   openPreview(node);
+}
+
+// The kinds Deluxe Docs is for: pages of text, documents, sheets, slides.
+function isDocument(node) {
+  return ['doc', 'sheet', 'slides', 'pdf', 'text', 'code'].includes(fileKind(node.mime, node.name));
+}
+
+// Hands the file to Deluxe Docs over a share link; if that fails the file
+// still opens in the drive's own preview, so nothing is a dead end.
+async function openInDocs(node) {
+  try {
+    await cloud.openInDocs(node);
+    state.shared.add(node.id);
+    render();
+    toast(`Opening “${node.name}” in Deluxe Docs`);
+  } catch (error) {
+    toast(error.message || 'Deluxe Docs could not be opened');
+    openPreview(node);
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1170,9 +1319,16 @@ async function openPreview(node) {
           ${icon(iconForKind(kind))}
           <p>This document could not be read in the browser.</p>
           <p class="muted">${escapeHtml(error && error.message ? error.message : 'Unknown error')}</p>
+          ${
+            cloud.docsReady()
+              ? '<button class="btn ghost" type="button" data-docs="1">Open in Deluxe Docs</button>'
+              : ''
+          }
           <button class="btn primary" type="button" data-download="1">Download ${escapeHtml(node.name)}</button>
         </div>`;
       body.querySelector('[data-download]').addEventListener('click', () => downloadNode(node));
+      const docsButton = body.querySelector('[data-docs]');
+      if (docsButton) docsButton.addEventListener('click', () => openInDocs(node));
     }
   } else if (isTextual(kind, node.mime, node.name)) {
     try {
@@ -1292,12 +1448,22 @@ async function handleUpload(fileList) {
   }
 
   const targetParent = state.view === 'drive' ? state.folderId : null;
+
+  // The server states the largest file it will take, so a file that can never
+  // be stored is refused straight away instead of after a long upload.
+  const limit = cloud.isOnline() ? cloud.uploadLimit() : 0;
   toast(`Uploading ${files.length} file${files.length === 1 ? '' : 's'}…`);
 
   let added = 0;
   let failed = 0;
+  let tooBig = 0;
 
   for (const file of files) {
+    if (limit && file.size > limit) {
+      failed += 1;
+      tooBig += 1;
+      continue;
+    }
     let parentId = targetParent;
     const relative = file.webkitRelativePath || '';
     if (relative) {
@@ -1325,6 +1491,8 @@ async function handleUpload(fileList) {
     toast(`${added} file${added === 1 ? '' : 's'} added`);
   } else if (added && failed) {
     toast(`${added} added, ${failed} could not be saved`);
+  } else if (tooBig && failed === tooBig) {
+    toast(`Nothing added: the server accepts files up to ${formatBytes(limit)}`);
   } else {
     toast('Nothing could be added — this browser refused to store the file');
   }
@@ -1394,6 +1562,11 @@ async function emptyTrash() {
 /* ------------------------------------------------------------------ */
 
 async function changePasswordFlow() {
+  if (cloud.isOnline()) {
+    await changePasswordOnServer();
+    return;
+  }
+
   const current = await showDialog({
     title: 'Change password',
     message: 'Enter your current password.',
@@ -1431,18 +1604,62 @@ async function changePasswordFlow() {
   toast('Password updated');
 }
 
+// A server account's password is checked by the server, so the new salt and
+// hash are made here and sent with the current hash as proof.
+async function changePasswordOnServer() {
+  const current = await showDialog({
+    title: 'Change password',
+    message: 'Enter your current password.',
+    input: '',
+    confirmLabel: 'Next',
+  });
+  if (!current) return;
+
+  const next = await showDialog({ title: 'New password', message: 'At least 4 characters.', input: '', confirmLabel: 'Next' });
+  if (!next) return;
+  if (next.length < 4) {
+    toast('Use at least 4 characters');
+    return;
+  }
+
+  const again = await showDialog({ title: 'Confirm new password', input: '', confirmLabel: 'Save' });
+  if (again !== next) {
+    toast('Passwords do not match');
+    return;
+  }
+
+  try {
+    const account = await cloud.accountById(state.currentUser ? state.currentUser.id : '');
+    if (!account || !account.salt) throw new Error('That account is not on the server.');
+
+    const currentHash = await auth.hashPassword(current, account.salt);
+    const salt = auth.makeSalt();
+    const hash = await auth.hashPassword(next, salt);
+
+    await cloud.changePassword({ id: state.currentUser.id, currentHash, salt, hash });
+    toast('Password updated');
+  } catch (error) {
+    toast(error.message || 'That password could not be changed');
+  }
+}
+
 async function resetDrive() {
   if (!state.currentUser) return;
 
+  const online = cloud.isOnline();
   const sure = await showDialog({
     title: 'Erase my files?',
-    message: `Every file and folder in ${state.currentUser.name}'s drive will be deleted from this device. The account and its password stay.`,
+    message: `Every file and folder in ${state.currentUser.name}'s drive will be deleted from ${
+      online ? 'the Deluxe Drive server' : 'this device'
+    }. The account and its password stay.`,
     confirmLabel: 'Erase my files',
     danger: true,
   });
   if (!sure) return;
 
-  await deleteNodesOfUser(state.currentUser.id);
+  if (online) await db.clearAll();
+  else await deleteNodesOfUser(state.currentUser.id);
+
   await loadNodes();
   render();
   toast('Your drive is empty');
@@ -1521,6 +1738,272 @@ function showCredits() {
 
   root.querySelector('[data-close]').addEventListener('click', close);
   root.querySelector('[data-action="close"]').addEventListener('click', close);
+}
+
+/* ------------------------------------------------------------------ */
+/* Deluxe Docs connection                                              */
+/* ------------------------------------------------------------------ */
+
+// Connect the documents app: the drive registers it as an OAuth viewer and
+// hands it a share link for each document opened here. Sign-in for the viewer
+// happens on Deluxe Drive's own pages, so its password never leaves this site.
+function showDocsDialog() {
+  const root = $('#dialog');
+  if (!root) return;
+
+  const online = cloud.isOnline();
+  const settings = cloud.docsSettings();
+
+  const status = !online
+    ? 'Deluxe Docs needs the Deluxe Drive server, and this copy did not find one (no /api/health answered), so the drive is using this browser’s own storage. Open the drive from its server, then tap Check for server.'
+    : settings.url
+      ? `Connected to ${settings.url}. The share link needs no sign-in, and Deluxe Docs can only read the files you open.`
+      : 'Not connected yet. Paste the Deluxe Docs page address, for example https://deluxe-docs.netlify.app.';
+
+  root.innerHTML = `
+    <div class="dialog-backdrop" data-close="1"></div>
+    <div class="dialog docs-dialog" role="dialog" aria-modal="true" aria-label="Deluxe Docs">
+      <h2>Deluxe Docs</h2>
+      <p class="dialog-msg">
+        Connect the documents app and every document you open here is handed to it over a share link.
+        ${online ? '' : ' Start the drive with its server to connect it.'}
+      </p>
+
+      <label class="docs-field">
+        <span>Deluxe Docs page address</span>
+        <input id="docs-url" type="url" inputmode="url" autocapitalize="none" autocorrect="off" spellcheck="false"
+          placeholder="https://…" value="${escapeHtml(settings.url)}" />
+      </label>
+
+      <label class="docs-check">
+        <input id="docs-auto" type="checkbox" ${settings.autoOpen ? 'checked' : ''} />
+        <span>Open documents in Deluxe Docs automatically</span>
+      </label>
+
+      <p id="docs-status" class="docs-status">${escapeHtml(status)}</p>
+
+      <div class="dialog-actions">
+        ${
+          online && settings.url
+            ? '<button class="btn ghost" type="button" data-action="disconnect">Disconnect</button>'
+            : ''
+        }
+        ${
+          online && settings.url
+            ? '<button class="btn ghost" type="button" data-action="open-docs">Open Deluxe Docs</button>'
+            : ''
+        }
+        ${
+          online
+            ? ''
+            : '<button class="btn ghost" type="button" data-action="check">Check for server</button>'
+        }
+        <button class="btn ghost" type="button" data-action="close">Close</button>
+        <button class="btn primary" type="button" data-action="connect">${
+          settings.url ? 'Reconnect' : 'Connect'
+        }</button>
+      </div>
+    </div>`;
+  root.classList.remove('hidden');
+
+  const statusNode = root.querySelector('#docs-status');
+  const urlField = root.querySelector('#docs-url');
+  const autoField = root.querySelector('#docs-auto');
+  const connectButton = root.querySelector('[data-action="connect"]');
+
+  const close = () => {
+    root.classList.add('hidden');
+    root.innerHTML = '';
+  };
+
+  root.querySelector('[data-close]').addEventListener('click', close);
+  root.querySelector('[data-action="close"]').addEventListener('click', close);
+
+  if (autoField) {
+    autoField.addEventListener('change', () => {
+      cloud.saveDocsSettings({ ...cloud.docsSettings(), autoOpen: autoField.checked });
+    });
+  }
+
+  const disconnect = root.querySelector('[data-action="disconnect"]');
+  if (disconnect) {
+    disconnect.addEventListener('click', async () => {
+      disconnect.disabled = true;
+      try {
+        await cloud.disconnectDocs();
+        toast('Deluxe Docs disconnected');
+      } catch (error) {
+        toast(error.message || 'Could not disconnect Deluxe Docs');
+      }
+      close();
+    });
+  }
+
+  const openDocsButton = root.querySelector('[data-action="open-docs"]');
+  if (openDocsButton) {
+    openDocsButton.addEventListener('click', () => {
+      window.open(settings.url, '_blank', 'noopener');
+    });
+  }
+
+  // A server that answers now but did not when the page opened (a cold start,
+  // a host that was still waking up) is worth another look: reloading puts the
+  // whole drive on it, sign-in included, instead of silently staying local.
+  const checkButton = root.querySelector('[data-action="check"]');
+  if (checkButton) {
+    checkButton.addEventListener('click', async () => {
+      checkButton.disabled = true;
+      if (statusNode) statusNode.textContent = 'Looking for the Deluxe Drive server…';
+
+      const server = await cloud.refreshServer();
+      if (!server) {
+        if (statusNode) {
+          statusNode.textContent =
+            'No Deluxe Drive server answered at this address. Open the drive from its server (node server/index.js, or Run here), then try again.';
+        }
+        checkButton.disabled = false;
+        return;
+      }
+
+      if (statusNode) statusNode.textContent = 'Server found — reloading the drive with it…';
+      location.reload();
+    });
+  }
+
+  if (urlField) {
+    urlField.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      connectButton.click();
+    });
+  }
+
+  connectButton.addEventListener('click', async () => {
+    const pageUrl = urlField ? String(urlField.value || '').trim() : '';
+
+    if (!pageUrl) {
+      const message = 'Type the Deluxe Docs page address, for example https://deluxe-docs.netlify.app.';
+      if (statusNode) statusNode.textContent = message;
+      toast(message);
+      if (urlField) urlField.focus();
+      return;
+    }
+
+    connectButton.disabled = true;
+    if (statusNode) statusNode.textContent = 'Connecting…';
+
+    try {
+      const saved = await cloud.connectDocs(pageUrl);
+      cloud.saveDocsSettings({ ...saved, autoOpen: autoField ? autoField.checked : true });
+      toast('Deluxe Docs connected');
+      close();
+    } catch (error) {
+      let message = (error && error.message) || 'Could not connect Deluxe Docs.';
+      if (error && error.status === 401) message = 'Sign in to Deluxe Drive again, then connect Deluxe Docs.';
+      if (statusNode) statusNode.textContent = message;
+      connectButton.disabled = false;
+      toast(message);
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Shared links                                                        */
+/* ------------------------------------------------------------------ */
+
+// Every link this account has handed out. One list, so a link made for
+// Deluxe Docs - or for anyone else - can still be found and closed.
+async function showSharesDialog() {
+  const root = $('#dialog');
+  if (!root) return;
+
+  if (!cloud.isOnline()) {
+    await showDialog({
+      title: 'Shared links need the server',
+      message: 'A link anyone can open exists only when the drive runs on its own server.',
+      confirmLabel: 'OK',
+      cancelLabel: '',
+    });
+    return;
+  }
+
+  let shares = [];
+  try {
+    shares = await cloud.listShares();
+  } catch (error) {
+    toast(error.message || 'Could not read the shared links');
+    return;
+  }
+
+  state.shared = new Set(shares.map((share) => share.fileId).filter(Boolean));
+  render();
+
+  const rows = shares.length
+    ? shares
+        .map(
+          (share) => `
+      <li class="share-row">
+        <span class="share-icon">${icon('link')}</span>
+        <div class="share-file">
+          <p class="share-name">${escapeHtml(share.name || 'Untitled')}</p>
+          <p class="share-when">Shared ${escapeHtml(formatDate(share.createdAt))}</p>
+        </div>
+        <div class="share-actions">
+          <button class="btn ghost" type="button" data-copy="${escapeHtml(share.url)}">Copy</button>
+          <button class="btn ghost share-stop" type="button" data-stop="${escapeHtml(share.fileId)}">Stop</button>
+        </div>
+      </li>`
+        )
+        .join('')
+    : '<li class="share-empty">No share links yet. Copy one from a file’s menu, or open a document in Deluxe Docs.</li>';
+
+  root.innerHTML = `
+    <div class="dialog-backdrop" data-close="1"></div>
+    <div class="dialog shares-dialog" role="dialog" aria-modal="true" aria-label="Shared links">
+      <h2>Shared links</h2>
+      <p class="dialog-msg">
+        Anyone with one of these links can open that file without signing in. Stopping a link closes
+        it for everyone.
+      </p>
+      <ul class="shares-list">${rows}</ul>
+      <div class="dialog-actions">
+        <button class="btn primary" type="button" data-action="close">Close</button>
+      </div>
+    </div>`;
+  root.classList.remove('hidden');
+
+  const close = () => {
+    root.classList.add('hidden');
+    root.innerHTML = '';
+  };
+
+  root.querySelector('[data-close]').addEventListener('click', close);
+  root.querySelector('[data-action="close"]').addEventListener('click', close);
+
+  root.querySelectorAll('[data-copy]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await copyText(button.dataset.copy || '');
+      toast('Share link copied');
+    });
+  });
+
+  root.querySelectorAll('[data-stop]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      const fileId = button.dataset.stop || '';
+
+      try {
+        await cloud.stopSharing(fileId);
+        state.shared.delete(fileId);
+        render();
+        close();
+        toast('Share link stopped');
+      } catch (error) {
+        button.disabled = false;
+        toast(error.message || 'That link could not be stopped');
+      }
+    });
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -1620,12 +2103,20 @@ function bindUI() {
       event.currentTarget,
       [
         { action: 'password', label: 'Change password', icon: 'lock' },
+        {
+          action: 'docs',
+          label: cloud.docsSettings().url ? 'Deluxe Docs (connected)' : 'Connect Deluxe Docs',
+          icon: 'doc',
+        },
+        ...(cloud.isOnline() ? [{ action: 'shares', label: 'Shared links', icon: 'link' }] : []),
         { action: 'credits', label: 'Credits', icon: 'info' },
         { action: 'lock', label: 'Lock drive', icon: 'logout' },
         { action: 'reset', label: 'Erase my files', icon: 'trash', danger: true },
       ],
       (action) => {
         if (action === 'password') changePasswordFlow();
+        else if (action === 'docs') showDocsDialog();
+        else if (action === 'shares') showSharesDialog();
         else if (action === 'credits') showCredits();
         else if (action === 'lock') lockDrive();
         else if (action === 'reset') resetDrive();
@@ -1799,7 +2290,7 @@ async function enterApp(user) {
 
   // Next time this browser opens the drive, offer this account (and only
   // this account) by name; the password is still required every visit.
-  if (user && user.id) rememberLastUser(user.id);
+  if (user && user.id) rememberUser(user);
 
   $('#auth').classList.add('hidden');
   $('#app').classList.remove('hidden');
@@ -1818,6 +2309,8 @@ async function enterApp(user) {
     state.nodes = new Map();
     toast(error.message || 'Could not read the drive');
   }
+
+  await refreshShares();
 
   render();
 }
@@ -1859,6 +2352,7 @@ let authMode = 'sign_in'; // sign_in | create
 let authHintId = null; // the account last used in this browser
 
 const LAST_USER_KEY = 'dd.lastUser';
+const LAST_NAME_KEY = 'dd.lastName';
 
 function readLastUser() {
   try {
@@ -1868,9 +2362,19 @@ function readLastUser() {
   }
 }
 
-function rememberLastUser(userId) {
+function readLastName() {
   try {
-    localStorage.setItem(LAST_USER_KEY, userId);
+    return localStorage.getItem(LAST_NAME_KEY);
+  } catch (error) {
+    return null;
+  }
+}
+
+function rememberUser(user) {
+  if (!user) return;
+  try {
+    if (user.id) localStorage.setItem(LAST_USER_KEY, user.id);
+    if (user.name) localStorage.setItem(LAST_NAME_KEY, user.name);
   } catch (error) {
     /* storage can be blocked; the drive still works */
   }
@@ -1879,6 +2383,16 @@ function rememberLastUser(userId) {
 async function initAuthScreen() {
   const buildNode = $('#auth-build');
   if (buildNode) buildNode.textContent = BUILD;
+
+  if (cloud.isOnline()) {
+    // The server never hands out a list of its accounts: only the name last
+    // used in this browser is offered again, typed in by the person.
+    authUsers = [];
+    authHintId = null;
+    authMode = readLastName() ? 'sign_in' : 'create';
+    renderAuthScreen();
+    return;
+  }
 
   authUsers = await auth.listUsers();
 
@@ -1893,7 +2407,45 @@ async function initAuthScreen() {
   renderAuthScreen();
 }
 
+// With a server, the accounts are not listed anywhere: the name last used in
+// this browser is offered again, and checked there by the server.
+function renderServerAuthScreen() {
+  const creating = authMode === 'create';
+  const lastName = readLastName();
+
+  $('#name-field').classList.remove('hidden');
+  const nameField = $('#auth-name');
+  if (!nameField.value) nameField.value = lastName || '';
+
+  $('#auth-password').value = '';
+  $('#auth-password2').value = '';
+  $('#auth-error').textContent = '';
+
+  $('#password-label').textContent = creating ? 'Choose a password' : 'Password';
+  $('#pw2-field').classList.toggle('hidden', !creating);
+  $('#auth-submit').textContent = creating ? 'Create account' : 'Unlock';
+
+  $('#auth-sub').textContent = creating
+    ? 'Create an account on the Deluxe Drive server. Its files open on every device you sign in on.'
+    : lastName
+      ? `Welcome back, ${lastName}. Sign in to open your drive from the Deluxe Drive server.`
+      : 'Sign in with your name and password. Your drive is kept on the Deluxe Drive server.';
+
+  $('#auth-switch').classList.add('hidden');
+  $('#auth-new').classList.remove('hidden');
+  $('#auth-new').textContent = creating ? 'Sign in to an existing account' : 'Create a new account';
+  $('#auth-reset').classList.remove('hidden');
+
+  if (creating) $('#auth-name').focus();
+  else $('#auth-password').focus();
+}
+
 function renderAuthScreen() {
+  if (cloud.isOnline()) {
+    renderServerAuthScreen();
+    return;
+  }
+
   const creating = authMode === 'create';
   const hinted = authHintId ? authUsers.find((user) => user.id === authHintId) || null : null;
   const newButton = $('#auth-new');
@@ -1947,6 +2499,17 @@ function bindAuthScreen() {
   });
 
   $('#auth-reset').addEventListener('click', async () => {
+    if (cloud.isOnline()) {
+      await showDialog({
+        title: 'Accounts live on the server',
+        message:
+          'A Deluxe Drive server account can only be erased while signed in: unlock it, then use Erase my files, or ask whoever runs the server.',
+        confirmLabel: 'OK',
+        cancelLabel: '',
+      });
+      return;
+    }
+
     const typed = $('#auth-name').value.trim();
     const user = typed
       ? authUsers.find((entry) => entry.name.toLowerCase() === typed.toLowerCase())
@@ -1987,6 +2550,55 @@ function bindAuthScreen() {
     if (!name) {
       error.textContent = 'Type your name.';
       $('#auth-name').focus();
+      return;
+    }
+
+    // On the server the password is hashed here with the salt it returns, and
+    // only that hash travels; the server never sees the password itself.
+    if (cloud.isOnline()) {
+      if (authMode === 'create') {
+        const confirmPassword = $('#auth-password2').value;
+
+        if (name.length < 2) {
+          error.textContent = 'That name is too short.';
+          return;
+        }
+        if (password.length < 4) {
+          error.textContent = 'Use at least 4 characters.';
+          return;
+        }
+        if (password !== confirmPassword) {
+          error.textContent = 'Passwords do not match.';
+          return;
+        }
+
+        submit.disabled = true;
+        try {
+          const salt = auth.makeSalt();
+          const hash = await auth.hashPassword(password, salt);
+          const user = await cloud.createAccount({ name, salt, hash });
+          submit.disabled = false;
+          await enterApp(user);
+          toast(`Welcome, ${user.name}`);
+        } catch (error_) {
+          submit.disabled = false;
+          error.textContent = error_.message || 'Could not create the account.';
+        }
+        return;
+      }
+
+      submit.disabled = true;
+      try {
+        const record = await cloud.findAccount(name);
+        const hash = await auth.hashPassword(password, record.salt);
+        const user = await cloud.startSession({ id: record.id, name: record.name, hash });
+        submit.disabled = false;
+        await enterApp(user);
+      } catch (error_) {
+        submit.disabled = false;
+        error.textContent = "That name and password don't match an account on this server.";
+        $('#auth-password').select();
+      }
       return;
     }
 
@@ -2060,15 +2672,24 @@ function bindAuthScreen() {
 }
 
 async function boot() {
+  // Served by the Deluxe Drive server, the drive keeps its accounts and files
+  // there. Served as plain files, /api/health is not there, this answers null,
+  // and the browser's own storage is used exactly as before.
+  try {
+    await cloud.detect();
+  } catch (error) {
+    /* no server: the browser's own storage is used */
+  }
+
   // Each step is named, so a failure says where it stopped instead of
   // surfacing the browser's unhelpful "Script error".
   let stage = 'opening the drive database';
 
   try {
-    await openDB();
+    if (!cloud.isOnline()) await openDB();
 
     stage = 'reading the accounts on this device';
-    await auth.migrateLegacyAccount();
+    if (!cloud.isOnline()) await auth.migrateLegacyAccount();
     auth.forgetSession();
 
     stage = 'setting up the account screen';

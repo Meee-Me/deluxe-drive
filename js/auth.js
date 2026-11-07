@@ -50,6 +50,17 @@ async function derive(password, saltHex) {
   return bytesToHex(new Uint8Array(bits));
 }
 
+// When the drive is served by its own server, the account lives there and
+// only this salt + hash pair is ever sent. They are made here, by the same
+// PBKDF2 code the password check uses, so both sides agree on the result.
+export function makeSalt() {
+  return randomHex(16);
+}
+
+export function hashPassword(password, saltHex) {
+  return derive(password, saltHex);
+}
+
 async function readUsers() {
   const record = await db.getSetting(USERS_KEY);
   return record && Array.isArray(record.value) ? record.value : [];

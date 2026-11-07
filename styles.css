@@ -1012,9 +1012,154 @@ button {
 
 .dialog-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 4px;
+}
+
+/* Deluxe Docs connection */
+
+.docs-dialog {
+  max-width: 430px;
+}
+
+.docs-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.docs-field input {
+  height: 44px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 400;
+  outline: none;
+}
+
+.docs-field input:focus {
+  border-color: var(--accent);
+  background: var(--surface);
+}
+
+.docs-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.docs-check input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.docs-status {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* Share links */
+
+.card-meta .share-badge {
+  display: inline-flex;
+  vertical-align: -3px;
+  margin-right: 4px;
+  color: var(--accent);
+}
+
+.card-meta .share-badge .ico {
+  width: 13px;
+  height: 13px;
+}
+
+.shares-dialog {
+  max-width: 440px;
+}
+
+.shares-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  max-height: 48vh;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.share-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.share-row + .share-row {
+  border-top: 1px solid var(--border);
+}
+
+.share-icon {
+  display: flex;
+  flex: none;
+  color: var(--accent);
+}
+
+.share-file {
+  min-width: 0;
+  flex: 1;
+}
+
+.share-name {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.share-when {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.share-actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.share-actions .btn {
+  height: 32px;
+  padding: 0 10px;
+  font-size: 12.5px;
+}
+
+.share-stop {
+  color: var(--danger);
+}
+
+.share-empty {
+  padding: 16px 14px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
 }
 
 .picker-list {

@@ -83,7 +83,10 @@ server/oauth.js     Authorization Code + PKCE for Deluxe Docs
 
 Deluxe Docs is a separate site. To connect it:
 
-1. Start Deluxe Drive with its server (so `/api/health` answers).
+1. Start Deluxe Drive with its server (so `/api/health` answers) at an address **other sites can
+   reach** — the preview link is private to you, so Deluxe Docs (which fetches the files from its
+   own origin) cannot use it: publish the drive (Go Live) and use that link. A static copy of the
+   drive can be pointed at such a server under **Deluxe Drive server** in the dialog below.
 2. In the drive, open the account menu (the avatar) → **Connect Deluxe Docs**.
 3. Paste the Deluxe Docs page address (`https://…`). The drive registers it as an OAuth client.
 4. **Copy Docs setup** copies that client's settings. In Deluxe Docs, a first visit shows a

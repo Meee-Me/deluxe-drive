@@ -8,7 +8,7 @@ import { mountPdf, mountScaled, closeViewer } from './viewer.js';
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 25';
+const BUILD = 'build 26';
 
 // The drive keeps its files in this browser's IndexedDB, or - when the page is
 // served by the Deluxe Drive server - on that server, under the signed-in
@@ -2020,6 +2020,42 @@ function showDocsDialog() {
       if (statusNode) statusNode.textContent = message;
       toast(message);
       if (urlField) urlField.focus();
+      return;
+    }
+
+    // Without a server there is nothing to register yet: take the address
+    // typed above, find that server, and come back on it.
+    if (!cloud.isOnline()) {
+      const field = root.querySelector('#docs-server');
+      const typed = field ? String(field.value || '').trim() : '';
+
+      if (!typed) {
+        const message = 'Enter the Deluxe Drive server address above first, or open the drive from its server.';
+        if (statusNode) statusNode.textContent = message;
+        toast(message);
+        if (field) field.focus();
+        return;
+      }
+
+      if (!cloud.setServer(typed)) {
+        const message = 'Enter the server address with https://, for example https://your-drive.freemilk.app.';
+        if (statusNode) statusNode.textContent = message;
+        toast(message);
+        return;
+      }
+
+      connectButton.disabled = true;
+      if (statusNode) statusNode.textContent = 'Looking for the Deluxe Drive server…';
+
+      const server = await cloud.refreshServer();
+      if (!server) {
+        if (statusNode) statusNode.textContent = `No Deluxe Drive server answered at ${typed}. Check the address, and that it is published.`;
+        connectButton.disabled = false;
+        return;
+      }
+
+      if (statusNode) statusNode.textContent = 'Server found — reloading the drive with it…';
+      location.reload();
       return;
     }
 

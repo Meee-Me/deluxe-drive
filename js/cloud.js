@@ -138,6 +138,12 @@ export function serverInfo() {
   return state.server;
 }
 
+// The address of the server in use: this page's own origin when it is served
+// by the server, or the one a static copy was pointed at.
+export function serverAddress() {
+  return state.base || location.origin;
+}
+
 export function isSignedIn() {
   return !!state.token;
 }

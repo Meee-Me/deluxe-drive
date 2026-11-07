@@ -1071,6 +1071,11 @@ button {
   color: var(--muted);
 }
 
+.docs-server code {
+  color: var(--text);
+  word-break: break-all;
+}
+
 .docs-setup {
   display: flex;
   flex-direction: column;

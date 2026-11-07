@@ -8,7 +8,7 @@ import { mountPdf, mountScaled, closeViewer } from './viewer.js';
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 26';
+const BUILD = 'build 27';
 
 // The drive keeps its files in this browser's IndexedDB, or - when the page is
 // served by the Deluxe Drive server - on that server, under the signed-in
@@ -1844,6 +1844,16 @@ function showDocsDialog() {
       ? `Connected to ${settings.url}. The share link needs no sign-in, and Deluxe Docs can only read the files you open.`
       : 'Not connected yet. Paste the Deluxe Docs page address, for example https://deluxe-docs.netlify.app.';
 
+  // Where the drive's server actually is, so it can be copied into another
+  // copy of the drive or into Deluxe Docs instead of being guessed.
+  const serverLine = online
+    ? `
+      <p class="docs-status docs-server">
+        Server <code>${escapeHtml(cloud.serverAddress())}</code>
+        <button class="link-inline" type="button" data-action="copy-server">copy</button>
+      </p>`
+    : '';
+
   // A static copy can still use a server somewhere else, once it is told where.
   const serverField = online
     ? ''
@@ -1889,6 +1899,7 @@ function showDocsDialog() {
       </label>
 
       <p id="docs-status" class="docs-status">${escapeHtml(status)}</p>
+      ${serverLine}
       ${serverField}
       ${setup}
 
@@ -1946,6 +1957,14 @@ function showDocsDialog() {
         toast(error.message || 'Could not disconnect Deluxe Docs');
       }
       close();
+    });
+  }
+
+  const copyServer = root.querySelector('[data-action="copy-server"]');
+  if (copyServer) {
+    copyServer.addEventListener('click', async () => {
+      await copyText(cloud.serverAddress());
+      toast('Server address copied');
     });
   }
 

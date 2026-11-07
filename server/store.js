@@ -32,6 +32,7 @@ const OAUTH_DIR = path.join(DATA_DIR, 'oauth');
 const ACCOUNTS_FILE = path.join(GLOBAL_DIR, 'accounts.json');
 const SHARES_FILE = path.join(GLOBAL_DIR, 'shares.json');
 const CLIENTS_FILE = path.join(OAUTH_DIR, 'clients.json');
+const LINKS_FILE = path.join(OAUTH_DIR, 'links.json');
 
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,120}$/;
 const HEX_PATTERN = /^[0-9a-fA-F]{16,128}$/;
@@ -590,33 +591,48 @@ async function listShares(accountId) {
 
 /* ---------------- Documentation links (Deluxe Docs setup) ---------------- */
 
-// A short code that stands for one account's connection to one client: Deluxe
-// Docs pastes the link the drive prints, fetches it, and gets the endpoints and
-// client id, plus the account the link belongs to, so each person on the drive
-// has their own link. It holds no secret (the client id is public), and a new
-// one costs nothing.
-const docsLinks = new Map(); // code -> { clientId, accountId, createdAt }
+// One stable connection link per account. Deluxe Docs pastes the link, fetches
+// it, and gets the endpoints plus a client registered for its own page, so any
+// copy of the viewer can connect with the same link id. The link holds no
+// secret, and it is kept on disk so it survives restarts.
+let linksCache = null;
 
-function issueDocsLink(clientId, accountId) {
-  const code = randomToken(6);
-  docsLinks.set(code, {
-    clientId: String(clientId),
-    accountId: String(accountId || ''),
-    createdAt: Date.now(),
-  });
-
-  if (docsLinks.size > 200) {
-    const oldest = [...docsLinks.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt);
-    for (const [key] of oldest.slice(0, docsLinks.size - 200)) docsLinks.delete(key);
+async function loadLinks() {
+  if (!linksCache) {
+    const data = await readJson(LINKS_FILE, { links: {} });
+    linksCache = plainObject(data.links);
   }
-
-  return code;
+  return linksCache;
 }
 
-function docsLinkByCode(code) {
+async function saveLinks() {
+  await writeJson(LINKS_FILE, { links: linksCache || {} });
+}
+
+async function ensureDocsLink(accountId) {
+  await init();
+
+  return serial(async () => {
+    const links = await loadLinks();
+    const id = String(accountId || '');
+
+    for (const [code, link] of Object.entries(links)) {
+      if (link.accountId === id) return { code, link };
+    }
+
+    const code = randomToken(6);
+    const link = { accountId: id, createdAt: Date.now() };
+    links[code] = link;
+    await saveLinks();
+    return { code, link };
+  });
+}
+
+async function docsLinkByCode(code) {
   const clean = String(code || '');
   if (!/^[0-9a-f]{8,64}$/i.test(clean)) return null;
-  return docsLinks.get(clean) || null;
+  const links = await loadLinks();
+  return links[clean] || null;
 }
 
 /* ---------------- sessions ---------------- */
@@ -827,7 +843,7 @@ module.exports = {
   registerClient,
   removeClient,
 
-  issueDocsLink,
+  ensureDocsLink,
   docsLinkByCode,
 
   SESSION_TTL_SECONDS,

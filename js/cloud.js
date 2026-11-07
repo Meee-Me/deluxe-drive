@@ -12,7 +12,7 @@
 import { db as localDb } from './db.js';
 
 const DOCS_KEY = 'dd.docs';
-const DOCS_DEFAULTS = { url: '', clientId: '', link: '', autoOpen: true };
+const DOCS_DEFAULTS = { url: '', clientId: '', link: '', linkId: '', autoOpen: true };
 const SERVER_KEY = 'dd.server';
 
 const state = {
@@ -402,6 +402,7 @@ export function docsSettings() {
       url: typeof parsed.url === 'string' ? parsed.url : '',
       clientId: typeof parsed.clientId === 'string' ? parsed.clientId : '',
       link: typeof parsed.link === 'string' ? parsed.link : '',
+      linkId: typeof parsed.linkId === 'string' ? parsed.linkId : '',
       autoOpen: parsed.autoOpen !== false,
     };
   } catch (error) {
@@ -414,6 +415,7 @@ export function saveDocsSettings(next) {
     url: typeof next.url === 'string' ? next.url : '',
     clientId: typeof next.clientId === 'string' ? next.clientId : '',
     link: typeof next.link === 'string' ? next.link : '',
+    linkId: typeof next.linkId === 'string' ? next.linkId : '',
     autoOpen: next.autoOpen !== false,
   };
   try {
@@ -473,26 +475,20 @@ export async function connectDocs(pageUrl) {
     url: normalized,
     clientId: data.clientId,
     link: data.link || '',
+    linkId: data.linkId || '',
     autoOpen: true,
   });
 }
 
-// The connection link Deluxe Docs pastes: it answers with this drive's OAuth
-// endpoints and the client id, so the viewer configures itself in one paste.
+// This account's connection link. The server makes it once and keeps it, so
+// every account has its own id and it stays the same across visits.
 export async function docsLink() {
-  const settings = docsSettings();
-  if (!settings.url) throw new Error('Connect Deluxe Docs first.');
   if (!isOnline()) throw new Error('Deluxe Docs needs the Deluxe Drive server.');
 
-  const data = await requestJson('/api/oauth/clients', {
-    method: 'POST',
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ name: 'Deluxe Docs', redirectUri: settings.url }),
-  });
-
+  const data = await requestJson('/api/docs/link');
   return saveDocsSettings({
     ...docsSettings(),
-    clientId: data.clientId || settings.clientId,
+    linkId: data.linkId || '',
     link: data.link || '',
   });
 }

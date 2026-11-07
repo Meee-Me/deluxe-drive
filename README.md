@@ -89,11 +89,10 @@ Deluxe Docs is a separate site. To connect it:
    drive can be pointed at such a server under **Deluxe Drive server** in the dialog below.
 2. In the drive, open the account menu (the avatar) → **Connect Deluxe Docs**.
 3. Paste the Deluxe Docs page address (`https://…`). The drive registers it as an OAuth client.
-4. **Copy connection link** copies one link, `https://<drive>/connect/<code>`. In Deluxe Docs,
-   paste that link into its **Connect to Deluxe Drive** box: the viewer reads it, configures
-   itself and signs in. One paste, no file to edit. Every account gets its **own** link: it carries
-   the account it was made by, and the drive's sign-in page offers that name (the password is still
-   typed there).
+4. Every account gets its own **Link ID** the first time the drive opens on the server — shown under
+   **Link for Deluxe Docs** in the account menu and in the Connect dialog, as
+   `https://<drive>/connect/<id>`. Copy it into Deluxe Docs' **Connect to Deluxe Drive** box: the
+   viewer reads it, registers its own page and signs in. One paste, no file to edit.
 5. Open a document in the drive. The file is shared and Deluxe Docs is opened at
    `…?url=<share link>&name=<file name>` — `url` is the name Deluxe Docs reads, `name` sets the tab
    title.

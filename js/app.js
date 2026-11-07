@@ -8,7 +8,7 @@ import { mountPdf, mountScaled, closeViewer } from './viewer.js';
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 30';
+const BUILD = 'build 31';
 
 // The drive keeps its files in this browser's IndexedDB, or - when the page is
 // served by the Deluxe Drive server - on that server, under the signed-in
@@ -1836,12 +1836,6 @@ async function copyDocsLink() {
     return;
   }
 
-  if (!cloud.docsSettings().url) {
-    toast('Connect Deluxe Docs first — paste its address in the box.');
-    showDocsDialog();
-    return;
-  }
-
   try {
     const saved = await cloud.docsLink();
     if (!saved.link) throw new Error('Could not make the link. Press Connect again.');
@@ -1891,30 +1885,23 @@ function showDocsDialog() {
 
   // The link Deluxe Docs pastes. It is shown as its short id, with the whole
   // link under it, and it can be remade at any time.
-  const linkId = settings.link ? String(settings.link).split('/').pop() : '';
+  const linkId = settings.linkId || (settings.link ? String(settings.link).split('/').pop() : '');
   const setup = !online
     ? ''
-    : settings.url
+    : linkId
       ? `
       <div class="docs-setup">
-        <p class="docs-setup-id">Link ID ${
-          linkId ? `<code>${escapeHtml(linkId)}</code>` : '<span class="muted">not made yet</span>'
-        }</p>
+        <p class="docs-setup-id">Link ID <code>${escapeHtml(linkId)}</code></p>
         <button class="btn ghost" type="button" data-action="copy-link">Copy connection link</button>
-        ${
-          settings.link
-            ? `<p class="docs-setup-link">${escapeHtml(settings.link)}</p>`
-            : ''
-        }
+        ${settings.link ? `<p class="docs-setup-link">${escapeHtml(settings.link)}</p>` : ''}
         <p class="docs-setup-hint">
-          Paste that link into the Connect box in Deluxe Docs. It carries this drive's address and
-          this account; the password is still typed on this drive's own page.
+          This account's own link. Paste it into the Connect box in Deluxe Docs; the password is
+          still typed on this drive's own page.
         </p>
       </div>`
       : `
       <p class="docs-status">
-        Paste the Deluxe Docs page address above and press Connect once — the Link ID for this
-        account appears here.
+        This account's Link ID is made on the server the first time the drive opens on it.
       </p>`;
 
   root.innerHTML = `
@@ -2557,6 +2544,16 @@ async function enterApp(user) {
   }
 
   await refreshShares();
+
+  // Every account gets its own Link ID for Deluxe Docs, made by the server and
+  // kept there, so it is ready before anyone asks for it.
+  if (cloud.isOnline()) {
+    try {
+      await cloud.docsLink();
+    } catch (error) {
+      /* the dialog can ask again */
+    }
+  }
 
   render();
 }

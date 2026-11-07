@@ -629,14 +629,28 @@ route('POST', '/api/oauth/clients', async (ctx) => {
   }
 
   const client = await store.registerClient({ name: body.name, redirectUri });
-  const code = store.issueDocsLink(client.id, session.userId);
+  const docs = await store.ensureDocsLink(session.userId);
 
   sendJson(ctx.res, 201, {
     clientId: client.id,
     name: client.name,
     redirectUri: client.redirectUri,
-    code,
-    link: `${publicOrigin(ctx.req)}/connect/${code}`,
+    linkId: docs.code,
+    link: `${publicOrigin(ctx.req)}/connect/${docs.code}`,
+  });
+});
+
+// The connection link this account hands to Deluxe Docs. It is made once and
+// kept, so every account has its own, and it stays the same until the account
+// is removed.
+route('GET', '/api/docs/link', async (ctx) => {
+  const session = requireSession(ctx);
+  if (!session) return;
+
+  const docs = await store.ensureDocsLink(session.userId);
+  sendJson(ctx.res, 200, {
+    linkId: docs.code,
+    link: `${publicOrigin(ctx.req)}/connect/${docs.code}`,
   });
 });
 
@@ -767,23 +781,22 @@ async function serveShared(req, res, token) {
 // https://drive/connect/<code> answers with the setup Deluxe Docs needs: the
 // endpoints on this server and the client id registered for it. The link holds
 // nothing secret; signing in still happens on the drive's own pages.
-async function serveConnectLink(req, res, code) {
+async function serveConnectLink(req, res, url, code) {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     sendJson(res, 405, { error: 'Only reading is allowed here.' });
     return;
   }
 
-  const link = store.docsLinkByCode(code);
+  const link = await store.docsLinkByCode(code);
   if (!link) {
-    sendJson(res, 404, { error: 'That connection link is not here. Make a new one in Deluxe Drive.' });
+    sendJson(res, 404, { error: 'That link id is not here. Copy it again from Deluxe Drive.' });
     return;
   }
 
-  const client = await store.clientById(link.clientId);
-  if (!client) {
-    sendJson(res, 404, { error: 'That connection link is no longer connected. Make a new one in Deluxe Drive.' });
-    return;
-  }
+  // The viewer names its own page, and a client is registered for it here, so
+  // the same link id works for any copy of Deluxe Docs.
+  const redirect = oauth.normalizeRedirect(url.searchParams.get('redirect') || '');
+  const client = redirect ? await store.registerClient({ name: 'Deluxe Docs', redirectUri: redirect }) : null;
 
   const origin = publicOrigin(req);
   sendJson(res, 200, {
@@ -792,8 +805,8 @@ async function serveConnectLink(req, res, code) {
     authorizeUrl: `${origin}/oauth/authorize`,
     tokenUrl: `${origin}/oauth/token`,
     userInfoUrl: `${origin}/oauth/userinfo`,
-    clientId: client.id,
-    redirectUri: client.redirectUri,
+    clientId: client ? client.id : '',
+    redirectUri: client ? client.redirectUri : '',
     accountId: link.accountId || '',
     scope: 'openid profile drive.read',
   });
@@ -962,7 +975,7 @@ async function handle(req, res) {
     }
 
     if (url.pathname.startsWith('/connect/')) {
-      await serveConnectLink(req, res, segments[1] || '');
+      await serveConnectLink(req, res, url, segments[1] || '');
       return;
     }
 

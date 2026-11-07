@@ -590,14 +590,20 @@ async function listShares(accountId) {
 
 /* ---------------- Documentation links (Deluxe Docs setup) ---------------- */
 
-// A short code that stands for one client's setup: Deluxe Docs pastes the link
-// the drive prints, fetches it, and gets the endpoints and client id. It holds
-// no secret (the client id is public), and a new one costs nothing.
-const docsLinks = new Map(); // code -> { clientId, createdAt }
+// A short code that stands for one account's connection to one client: Deluxe
+// Docs pastes the link the drive prints, fetches it, and gets the endpoints and
+// client id, plus the account the link belongs to, so each person on the drive
+// has their own link. It holds no secret (the client id is public), and a new
+// one costs nothing.
+const docsLinks = new Map(); // code -> { clientId, accountId, createdAt }
 
-function issueDocsLink(clientId) {
+function issueDocsLink(clientId, accountId) {
   const code = randomToken(6);
-  docsLinks.set(code, { clientId: String(clientId), createdAt: Date.now() });
+  docsLinks.set(code, {
+    clientId: String(clientId),
+    accountId: String(accountId || ''),
+    createdAt: Date.now(),
+  });
 
   if (docsLinks.size > 200) {
     const oldest = [...docsLinks.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt);

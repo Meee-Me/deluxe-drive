@@ -629,7 +629,7 @@ route('POST', '/api/oauth/clients', async (ctx) => {
   }
 
   const client = await store.registerClient({ name: body.name, redirectUri });
-  const code = store.issueDocsLink(client.id);
+  const code = store.issueDocsLink(client.id, session.userId);
 
   sendJson(ctx.res, 201, {
     clientId: client.id,
@@ -794,6 +794,7 @@ async function serveConnectLink(req, res, code) {
     userInfoUrl: `${origin}/oauth/userinfo`,
     clientId: client.id,
     redirectUri: client.redirectUri,
+    accountId: link.accountId || '',
     scope: 'openid profile drive.read',
   });
 }

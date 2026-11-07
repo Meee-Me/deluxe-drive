@@ -252,8 +252,14 @@ async function authorize({ method, query, body }) {
 
   const action = `/oauth/authorize?${query.toString()}`;
 
+  // A connection link made by one account carries its id, so the sign-in page
+  // can offer that name. The password is still typed here, never sent on.
+  const hintId = String(query.get('login_hint') || '');
+  const hinted = hintId ? await store.accountById(hintId) : null;
+  const hintName = hinted ? hinted.name : '';
+
   if (method !== 'POST') {
-    return { status: 200, html: loginPage({ client, action, error: '' }) };
+    return { status: 200, html: loginPage({ client, action, error: '', name: hintName }) };
   }
 
   const requestId = String(body.get('request') || '');
@@ -302,7 +308,7 @@ async function authorize({ method, query, body }) {
       html: loginPage({
         client,
         action,
-        name,
+        name: name || hintName,
         error: 'That name and password do not match an account on this drive.',
       }),
     };

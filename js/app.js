@@ -3,11 +3,12 @@ import * as auth from './auth.js';
 import * as cloud from './cloud.js';
 import { icon, escapeHtml, formatBytes, formatDate, formatDateTime, showDialog, toast } from './ui.js';
 import { officeType, renderOfficePreview, renderDelimited, renderDocxFaithful } from './office.js';
+import { mountPdf, mountScaled, closeViewer } from './viewer.js';
 
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 21';
+const BUILD = 'build 22';
 
 // The drive keeps its files in this browser's IndexedDB, or - when the page is
 // served by the Deluxe Drive server - on that server, under the signed-in
@@ -1252,9 +1253,15 @@ async function readText(blob) {
   return blob.size > limit ? `${text}\n\n… (preview truncated)` : text;
 }
 
+let previewToken = 0;
+
 async function openPreview(node) {
   const modal = $('#preview');
   if (!modal) return;
+
+  closeViewer();
+  const token = (previewToken += 1);
+  const isCurrent = () => token === previewToken && state.previewId === node.id;
 
   state.previewId = node.id;
 
@@ -1295,7 +1302,19 @@ async function openPreview(node) {
   } else if (kind === 'audio') {
     body.innerHTML = `<audio class="preview-audio" src="${url}" controls></audio>`;
   } else if (kind === 'pdf') {
-    body.innerHTML = `<iframe class="preview-frame" src="${url}" title="${escapeHtml(node.name)}"></iframe>`;
+    // Every page is drawn by PDF.js so the whole file scrolls and zooms. If
+    // it cannot load (offline, blocked), the browser's own viewer is used.
+    body.innerHTML = '<p class="muted">Loading pages…</p>';
+    try {
+      body.innerHTML = '';
+      await mountPdf(body, blob, isCurrent);
+    } catch (error) {
+      if (error && error.stale) return;
+      console.warn('PDF.js could not open this file, using the browser viewer', error);
+      if (!isCurrent()) return;
+      closeViewer();
+      body.innerHTML = `<iframe class="preview-frame" src="${url}" title="${escapeHtml(node.name)}"></iframe>`;
+    }
   } else if (officeType(node.name)) {
     // Word documents are laid out properly by docx-preview (pages, tables,
     // images, fonts). Everything else is read from its XML by office.js.
@@ -1306,12 +1325,33 @@ async function openPreview(node) {
       body.appendChild(holder);
 
       const laidOut = await renderDocxFaithful(blob, holder);
-      if (laidOut) return;
+      if (!isCurrent()) return;
+      if (laidOut) {
+        mountScaled(body, holder, { mode: 'max', pageSelector: 'section.docx', pageLabel: 'Page' });
+        return;
+      }
     }
 
     try {
-      body.innerHTML = await renderOfficePreview(node.name, blob);
+      const html = await renderOfficePreview(node.name, blob);
+      if (!isCurrent()) return;
+      body.innerHTML = html;
+
+      const type = officeType(node.name);
+      const content = body.firstElementChild;
+      if (content) {
+        const isSheet = type === 'xlsx' || type === 'ods';
+        const isDeck = type === 'pptx' || type === 'odp';
+        mountScaled(body, content, {
+          mode: isSheet ? 'max' : 'fill',
+          pageSelector: isDeck ? '.slide-frame, .slide-page, .office-slide' : isSheet ? '.office-sheet' : '',
+          pageLabel: isDeck ? 'Slide' : 'Sheet',
+          minInitial: isSheet ? 0.6 : 0,
+        });
+      }
     } catch (error) {
+      if (!isCurrent()) return;
+      closeViewer();
       console.warn('Could not read document', node.name, error);
       openLink.classList.add('hidden');
       body.innerHTML = `
@@ -1333,9 +1373,13 @@ async function openPreview(node) {
   } else if (isTextual(kind, node.mime, node.name)) {
     try {
       const text = await readText(blob);
+      if (!isCurrent()) return;
       const extension = String(node.name).toLowerCase().split('.').pop();
       if ((extension === 'csv' || extension === 'tsv') && text.length < 2000000) {
         body.innerHTML = renderDelimited(text, extension === 'tsv' ? '\t' : ',');
+        if (body.firstElementChild) {
+          mountScaled(body, body.firstElementChild, { mode: 'max', pageSelector: '', pageLabel: 'Sheet', minInitial: 0.6 });
+        }
       } else {
         body.innerHTML = `<pre class="preview-text">${escapeHtml(text)}</pre>`;
       }
@@ -1359,6 +1403,7 @@ function closePreview() {
   const modal = $('#preview');
   if (!modal) return;
   modal.classList.add('hidden');
+  closeViewer();
   $('#preview-body').innerHTML = '';
   state.previewId = null;
 }
@@ -1691,6 +1736,41 @@ const CREDITS_SITES = [
     label: 'deluxe-translate-8m27.netlify.app',
   },
 ];
+
+// "More websites": the button in the top bar (and the link on the lock
+// screen) opens the other sites by Deluxe Lord.
+function showMoreSites() {
+  const root = $('#dialog');
+  if (!root) return;
+
+  const links = CREDITS_SITES.map(
+    (site) => `
+      <a class="credit-link" href="${site.url}" target="_blank" rel="noopener">
+        <span class="credit-link-name">${escapeHtml(site.name)}</span>
+        <span class="credit-link-url">${escapeHtml(site.label)}</span>
+      </a>`
+  ).join('');
+
+  root.innerHTML = `
+    <div class="dialog-backdrop" data-close="1"></div>
+    <div class="dialog credits-dialog" role="dialog" aria-modal="true" aria-label="More websites">
+      <h2>More websites</h2>
+      <p class="credits-tagline">Other sites by Deluxe Lord.</p>
+      <div class="credits-links">${links}</div>
+      <div class="dialog-actions">
+        <button class="btn primary" type="button" data-action="close">Close</button>
+      </div>
+    </div>`;
+  root.classList.remove('hidden');
+
+  const close = () => {
+    root.classList.add('hidden');
+    root.innerHTML = '';
+  };
+
+  root.querySelector('[data-close]').addEventListener('click', close);
+  root.querySelector('[data-action="close"]').addEventListener('click', close);
+}
 
 function showCredits() {
   const root = $('#dialog');
@@ -2124,6 +2204,8 @@ function bindUI() {
     );
   });
 
+  $('#more-sites-btn').addEventListener('click', showMoreSites);
+
   $('#empty-trash').addEventListener('click', emptyTrash);
 
   $('#select-btn').addEventListener('click', toggleSelectMode);
@@ -2482,6 +2564,7 @@ function renderAuthScreen() {
 
 function bindAuthScreen() {
   $('#auth-credits').addEventListener('click', showCredits);
+  $('#auth-more-sites').addEventListener('click', showMoreSites);
 
   $('#auth-switch').addEventListener('click', () => {
     authHintId = null;

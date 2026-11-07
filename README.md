@@ -23,6 +23,12 @@ shared — and it can hand a document to **Deluxe Docs**.
   the deck's font sizes and colours, images, solid fills and tables, on a canvas at the deck's exact
   aspect ratio; CSV/TSV open as tables; plain text and code are shown as text. Anything else offers
   a download.
+- **Zoom and every page** — PDF, Word, PowerPoint, Excel (and OpenDocument / RTF / CSV) previews
+  show **all** pages, slides or sheets in one scrolling view. Zoom 25%–400% with the − / + buttons,
+  **Fit width**, `+` `-` `0` on the keyboard, Ctrl/⌘ + mouse wheel (or a trackpad pinch), or a
+  two-finger pinch on a phone. A **Page / Slide / Sheet** box shows where you are and jumps to any
+  number. PDFs are drawn by a bundled copy of PDF.js (rendered sharply at each zoom level); if it
+  cannot load, the browser's own PDF viewer is used instead.
 - **Sharing** — a file can be given a share link (`/s/<token>`) that needs no sign-in and serves
   that one file, with HTTP Range support so video and PDF seek. Shared files wear a link badge, and
   **Shared links** in the account menu lists every link with Copy and Stop. Deleting a file also
@@ -32,6 +38,8 @@ shared — and it can hand a document to **Deluxe Docs**.
   `/oauth/userinfo`). Once connected, opening a document (Word, Excel, slides, PDF, text) shares it
   and opens it in Deluxe Docs; if that fails or is switched off, it opens in the built-in preview.
   **Open Deluxe Docs** in the connection dialog reopens the viewer at any time.
+- **More websites** — a button in the top bar (and a link on the lock screen) opens a list of the
+  other Deluxe Lord sites: YouTube Guider AI, Deluxe Convert and Deluxe Translate.
 - **Select mode** — select several items and download, star, move or delete them together, plus
   a details panel and next/previous navigation inside the preview.
 - **Grid and list layouts**, sorting by name / last modified / size, storage usage meter, light and
@@ -59,7 +67,8 @@ styles.css          all styling, including dark mode and mobile drawer
 js/app.js           app state, rendering, file actions, previews, uploads
 js/cloud.js         the server client: accounts, storage, share links, Deluxe Docs
 js/office.js        reads .docx / .xlsx / .pptx / .odt / .ods / .odp / .rtf in the browser
-vendor/             pinned docx-preview + JSZip builds used for faithful .docx layout
+js/viewer.js        zoom controls, pinch / Ctrl+wheel, page box, and the all-pages PDF renderer
+vendor/             pinned docx-preview + JSZip (faithful .docx) and PDF.js (PDF pages) builds
 js/db.js            IndexedDB layer (nodes / blobs / settings stores), used without a server
 js/auth.js          password hashing, unlock session
 js/ui.js            icons, formatting, toasts, modal dialogs

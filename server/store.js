@@ -588,6 +588,31 @@ async function listShares(accountId) {
     .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 }
 
+/* ---------------- Documentation links (Deluxe Docs setup) ---------------- */
+
+// A short code that stands for one client's setup: Deluxe Docs pastes the link
+// the drive prints, fetches it, and gets the endpoints and client id. It holds
+// no secret (the client id is public), and a new one costs nothing.
+const docsLinks = new Map(); // code -> { clientId, createdAt }
+
+function issueDocsLink(clientId) {
+  const code = randomToken(6);
+  docsLinks.set(code, { clientId: String(clientId), createdAt: Date.now() });
+
+  if (docsLinks.size > 200) {
+    const oldest = [...docsLinks.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt);
+    for (const [key] of oldest.slice(0, docsLinks.size - 200)) docsLinks.delete(key);
+  }
+
+  return code;
+}
+
+function docsLinkByCode(code) {
+  const clean = String(code || '');
+  if (!/^[0-9a-f]{8,64}$/i.test(clean)) return null;
+  return docsLinks.get(clean) || null;
+}
+
 /* ---------------- sessions ---------------- */
 
 const sessions = new Map(); // token -> { token, userId, clientId, scope, createdAt, expiresAt }
@@ -795,6 +820,9 @@ module.exports = {
   clientById,
   registerClient,
   removeClient,
+
+  issueDocsLink,
+  docsLinkByCode,
 
   SESSION_TTL_SECONDS,
 };

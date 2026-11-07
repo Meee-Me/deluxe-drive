@@ -8,7 +8,7 @@ import { mountPdf, mountScaled, closeViewer } from './viewer.js';
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 27';
+const BUILD = 'build 28';
 
 // The drive keeps its files in this browser's IndexedDB, or - when the page is
 // served by the Deluxe Drive server - on that server, under the signed-in
@@ -1864,16 +1864,19 @@ function showDocsDialog() {
           placeholder="https://your-drive.freemilk.app" value="${escapeHtml(cloud.savedServer())}" />
       </label>`;
 
-  // Deluxe Docs keeps its Drive sign-in in its own config.js, so the client it
-  // was just registered as has to be copyable from here.
+  // Deluxe Docs takes one paste: a connection link that answers with this
+  // drive's endpoints and the client registered for it.
   const setup =
-    online && settings.clientId
+    online && settings.url
       ? `
       <div class="docs-setup">
-        <p class="docs-setup-id">Client ID <code>${escapeHtml(settings.clientId)}</code></p>
-        <button class="btn ghost" type="button" data-action="copy-setup">Copy Docs setup</button>
+        <p class="docs-setup-id">Connection link${
+          settings.link ? ` <code>${escapeHtml(settings.link)}</code>` : ''
+        }</p>
+        <button class="btn ghost" type="button" data-action="copy-link">Copy connection link</button>
         <p class="docs-setup-hint">
-          Paste it into Deluxe Docs’ <code>config.js</code> so that app can sign in to this drive.
+          Paste it into the Connect box in Deluxe Docs. It carries this drive's address and client;
+          the password is still typed on this drive's own page.
         </p>
       </div>`
       : '';
@@ -1968,11 +1971,21 @@ function showDocsDialog() {
     });
   }
 
-  const copySetup = root.querySelector('[data-action="copy-setup"]');
-  if (copySetup) {
-    copySetup.addEventListener('click', async () => {
-      await copyText(JSON.stringify(cloud.docsConfig(), null, 2));
-      toast('Deluxe Docs setup copied');
+  const copyLink = root.querySelector('[data-action="copy-link"]');
+  if (copyLink) {
+    copyLink.addEventListener('click', async () => {
+      copyLink.disabled = true;
+      try {
+        // A fresh code every time: a link made before a restart is no longer
+        // known to the server, and a new one costs nothing.
+        const saved = await cloud.docsLink();
+        if (!saved.link) throw new Error('Could not make a connection link. Press Connect again.');
+        await copyText(saved.link);
+        toast('Connection link copied');
+      } catch (error) {
+        toast(error.message || 'Could not copy the connection link');
+      }
+      copyLink.disabled = false;
     });
   }
 

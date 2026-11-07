@@ -629,10 +629,14 @@ route('POST', '/api/oauth/clients', async (ctx) => {
   }
 
   const client = await store.registerClient({ name: body.name, redirectUri });
+  const code = store.issueDocsLink(client.id);
+
   sendJson(ctx.res, 201, {
     clientId: client.id,
     name: client.name,
     redirectUri: client.redirectUri,
+    code,
+    link: `${publicOrigin(ctx.req)}/connect/${code}`,
   });
 });
 
@@ -754,6 +758,44 @@ async function serveShared(req, res, token) {
   }
 
   streamBlob(req, res, info, share.name || share.blobId, false);
+}
+
+/* ------------------------------------------------------------------ */
+/* A connection link for Deluxe Docs                                   */
+/* ------------------------------------------------------------------ */
+
+// https://drive/connect/<code> answers with the setup Deluxe Docs needs: the
+// endpoints on this server and the client id registered for it. The link holds
+// nothing secret; signing in still happens on the drive's own pages.
+async function serveConnectLink(req, res, code) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    sendJson(res, 405, { error: 'Only reading is allowed here.' });
+    return;
+  }
+
+  const link = store.docsLinkByCode(code);
+  if (!link) {
+    sendJson(res, 404, { error: 'That connection link is not here. Make a new one in Deluxe Drive.' });
+    return;
+  }
+
+  const client = await store.clientById(link.clientId);
+  if (!client) {
+    sendJson(res, 404, { error: 'That connection link is no longer connected. Make a new one in Deluxe Drive.' });
+    return;
+  }
+
+  const origin = publicOrigin(req);
+  sendJson(res, 200, {
+    driveName: SERVER_NAME,
+    driveUrl: origin,
+    authorizeUrl: `${origin}/oauth/authorize`,
+    tokenUrl: `${origin}/oauth/token`,
+    userInfoUrl: `${origin}/oauth/userinfo`,
+    clientId: client.id,
+    redirectUri: client.redirectUri,
+    scope: 'openid profile drive.read',
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -915,6 +957,11 @@ async function handle(req, res) {
 
     if (url.pathname.startsWith('/oauth/')) {
       await handleOauth(req, res, url);
+      return;
+    }
+
+    if (url.pathname.startsWith('/connect/')) {
+      await serveConnectLink(req, res, segments[1] || '');
       return;
     }
 

@@ -13,25 +13,76 @@ import { db as localDb } from './db.js';
 
 const DOCS_KEY = 'dd.docs';
 const DOCS_DEFAULTS = { url: '', clientId: '', autoOpen: true };
+const SERVER_KEY = 'dd.server';
 
 const state = {
   server: null,
+  base: '',
   token: null,
   user: null,
 };
 
 /* ------------------------------------------------------------------ */
+/* Which server, if any                                                */
+/* ------------------------------------------------------------------ */
+
+// A copy served as plain files (Netlify, GitHub Pages) has no server of its
+// own. It can still work, by being told where a Deluxe Drive server lives.
+export function savedServer() {
+  try {
+    return localStorage.getItem(SERVER_KEY) || '';
+  } catch (error) {
+    return '';
+  }
+}
+
+export function normalizeServer(value) {
+  let raw = String(value || '').trim();
+  if (!raw) return null;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) raw = `https://${raw.replace(/^\/+/, '')}`;
+
+  let url;
+  try {
+    url = new URL(raw);
+  } catch (error) {
+    return null;
+  }
+
+  const local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(url.hostname);
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) return null;
+  return url.origin;
+}
+
+export function setServer(value) {
+  const origin = normalizeServer(value);
+  if (!origin) return null;
+  try {
+    localStorage.setItem(SERVER_KEY, origin);
+  } catch (error) {
+    /* storage can be blocked; the drive still asks the same origin */
+  }
+  return origin;
+}
+
+export function clearServer() {
+  try {
+    localStorage.removeItem(SERVER_KEY);
+  } catch (error) {
+    /* nothing stored anyway */
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Talking to the server                                               */
 /* ------------------------------------------------------------------ */
 
-// One question to the drive's own server. A cookie-gated host (a private
-// preview, a site behind an access page) only answers when the page's own
-// cookies go along, so this is always a same-origin request with credentials,
-// never a bare one: a bare one gets that host's HTML gate instead of JSON,
-// which reads as "there is no server" and quietly turns the server off.
-async function probe() {
+// One question to a Deluxe Drive server: this page's own, or the one a static
+// copy was given. A cookie-gated host (a private preview) only answers when the
+// page's own cookies go along, so this never sends a bare, credential-less one:
+// that gets the host's HTML gate instead of JSON, which reads as "no server".
+async function probeAt(base) {
   try {
-    const response = await fetch('/api/health', {
+    const response = await fetch(`${base}/api/health`, {
       headers: { Accept: 'application/json' },
       cache: 'no-store',
       credentials: 'same-origin',
@@ -44,6 +95,24 @@ async function probe() {
   } catch (error) {
     return null;
   }
+}
+
+async function probe() {
+  // The page's own origin first: served by the server, that is the server.
+  // Only then the address a static copy was given, if it is another one.
+  const bases = [''];
+  const saved = savedServer();
+  if (saved && saved !== location.origin) bases.push(saved);
+
+  for (const base of bases) {
+    const found = await probeAt(base);
+    if (found) {
+      state.base = base;
+      return found;
+    }
+  }
+
+  return null;
 }
 
 export async function detect() {
@@ -83,7 +152,7 @@ async function request(path, options = {}) {
 
   let response;
   try {
-    response = await fetch(path, {
+    response = await fetch(`${state.base}${path}`, {
       ...options,
       headers,
       credentials: 'same-origin',
@@ -414,7 +483,7 @@ export async function disconnectDocs() {
 // What Deluxe Docs needs to sign in against this drive, for a viewer that
 // asks for it.
 export function docsConfig(settings = docsSettings()) {
-  const origin = location.origin;
+  const origin = state.base || location.origin;
   return {
     driveName: 'Deluxe Drive',
     driveUrl: origin,

@@ -49,7 +49,9 @@ shared — and it can hand a document to **Deluxe Docs**.
 
 **As plain files.** Open `index.html` over http(s) — for example the preview link — and it works.
 `file://` will not work because ES modules and WebCrypto need a proper origin. Files stay in that
-browser, and Deluxe Docs cannot connect (it needs the server).
+browser, and Deluxe Docs cannot connect (it needs the server). A copy served this way can still use
+a server elsewhere: open the account menu → **Connect Deluxe Docs**, and enter its address under
+**Deluxe Drive server** — every call is sent there from then on (the server answers CORS).
 
 **With the server.** No dependencies to install: node's own `http`, `fs` and `crypto` do it.
 

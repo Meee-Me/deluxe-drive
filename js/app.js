@@ -8,7 +8,7 @@ import { mountPdf, mountScaled, closeViewer } from './viewer.js';
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 24';
+const BUILD = 'build 25';
 
 // The drive keeps its files in this browser's IndexedDB, or - when the page is
 // served by the Deluxe Drive server - on that server, under the signed-in
@@ -1839,10 +1839,20 @@ function showDocsDialog() {
   const docsDefault = 'https://deluxe-docs.netlify.app';
 
   const status = !online
-    ? 'Deluxe Docs needs the Deluxe Drive server, and this copy did not find one (no /api/health answered), so the drive is using this browser’s own storage. Open the drive from its server, then tap Check for server.'
+    ? `This copy (${location.host}) is served as plain files, so it has no server of its own and keeps files in this browser. Enter the address of a Deluxe Drive server below — or open the drive from that server.`
     : settings.url
       ? `Connected to ${settings.url}. The share link needs no sign-in, and Deluxe Docs can only read the files you open.`
       : 'Not connected yet. Paste the Deluxe Docs page address, for example https://deluxe-docs.netlify.app.';
+
+  // A static copy can still use a server somewhere else, once it is told where.
+  const serverField = online
+    ? ''
+    : `
+      <label class="docs-field">
+        <span>Deluxe Drive server address</span>
+        <input id="docs-server" type="url" inputmode="url" autocapitalize="none" autocorrect="off" spellcheck="false"
+          placeholder="https://your-drive.freemilk.app" value="${escapeHtml(cloud.savedServer())}" />
+      </label>`;
 
   // Deluxe Docs keeps its Drive sign-in in its own config.js, so the client it
   // was just registered as has to be copyable from here.
@@ -1864,7 +1874,7 @@ function showDocsDialog() {
       <h2>Deluxe Docs</h2>
       <p class="dialog-msg">
         Connect the documents app and every document you open here is handed to it over a share link.
-        ${online ? '' : ' Start the drive with its server to connect it.'}
+        ${online ? '' : ' Enter the address of a Deluxe Drive server below, then use it, or open the drive from that server.'}
       </p>
 
       <label class="docs-field">
@@ -1879,6 +1889,7 @@ function showDocsDialog() {
       </label>
 
       <p id="docs-status" class="docs-status">${escapeHtml(status)}</p>
+      ${serverField}
       ${setup}
 
       <div class="dialog-actions">
@@ -1895,7 +1906,7 @@ function showDocsDialog() {
         ${
           online
             ? ''
-            : '<button class="btn ghost" type="button" data-action="check">Check for server</button>'
+            : '<button class="btn ghost" type="button" data-action="check">Use this server</button>'
         }
         <button class="btn ghost" type="button" data-action="close">Close</button>
         <button class="btn primary" type="button" data-action="connect">${
@@ -1959,19 +1970,36 @@ function showDocsDialog() {
   if (checkButton) {
     checkButton.addEventListener('click', async () => {
       checkButton.disabled = true;
-      if (statusNode) statusNode.textContent = 'Looking for the Deluxe Drive server…';
+
+      const field = root.querySelector('#docs-server');
+      const typed = field ? String(field.value || '').trim() : '';
+      const show = (message) => {
+        if (statusNode) statusNode.textContent = message;
+      };
+
+      if (typed) {
+        const saved = cloud.setServer(typed);
+        if (!saved) {
+          show('Enter the server address with https://, for example https://your-drive.freemilk.app.');
+          checkButton.disabled = false;
+          return;
+        }
+      }
+
+      show('Looking for the Deluxe Drive server…');
 
       const server = await cloud.refreshServer();
       if (!server) {
-        if (statusNode) {
-          statusNode.textContent =
-            'No Deluxe Drive server answered at this address. Open the drive from its server (node server/index.js, or Run here), then try again.';
-        }
+        show(
+          typed
+            ? `No Deluxe Drive server answered at ${typed}. Check the address, and that the server is running.`
+            : 'No Deluxe Drive server answered. Open the drive from its server, or enter a server address above.'
+        );
         checkButton.disabled = false;
         return;
       }
 
-      if (statusNode) statusNode.textContent = 'Server found — reloading the drive with it…';
+      show('Server found — reloading the drive with it…');
       location.reload();
     });
   }

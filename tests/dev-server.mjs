@@ -15,7 +15,7 @@ const types = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/ja
 http.createServer(async (req, res) => {
   const origin = `http://${req.headers.host}`;
   const url = new URL(req.url, origin);
-  const cors = { 'Access-Control-Allow-Origin': req.headers.origin || '*', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, Range, X-Deluxe-Mime, X-Deluxe-Name', 'Access-Control-Allow-Methods': 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS' };
+  const cors = { 'Access-Control-Allow-Origin': req.headers.origin || '*', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, Range, X-Deluxe-Mime, X-Deluxe-Name, X-Deluxe-Parent', 'Access-Control-Allow-Methods': 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS' };
   if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
   if (/^\/(api|s)\//.test(url.pathname)) {
     const chunks = []; for await (const c of req) chunks.push(c);

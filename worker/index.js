@@ -26,7 +26,7 @@ function withCors(request, response) {
   headers.set('Access-Control-Allow-Origin', request.headers.get('Origin') || '*');
   headers.set('Vary', 'Origin');
   headers.set('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS');
-  headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range, X-Deluxe-Mime, X-Deluxe-Name');
+  headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range, X-Deluxe-Mime, X-Deluxe-Name, X-Deluxe-Parent');
   headers.set('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Range, Accept-Ranges');
   headers.set('Access-Control-Max-Age', '86400');
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });

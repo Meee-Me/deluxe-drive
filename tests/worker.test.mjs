@@ -160,6 +160,29 @@ r = await call('GET', '/api/db/blobs/f_1', { token: V });
 assert.equal((await r.arrayBuffer()).byteLength, 1000); ok('docs key can list and read files');
 
 // viewer token is read-only and cannot reach anything else
+// Docs may save over a file it opened, and add new files, nothing else
+r = await call('PUT', '/api/docs/files/f_1', { token: V, raw: new Uint8Array([1, 2, 3]), headers: { 'Content-Length': '3', 'X-Deluxe-Mime': 'application/pdf' } });
+assert.equal(r.status, 200);
+let savedNode = (await j(r)).node;
+assert.equal(savedNode.size, 3); assert.equal(savedNode.name, node.name); assert.ok(savedNode.updatedAt > 1);
+assert.deepEqual(new Uint8Array(await (await call('GET', '/api/db/blobs/f_1', { token: T })).arrayBuffer()), new Uint8Array([1, 2, 3]));
+assert.equal((await call('PUT', '/api/docs/files/d_1', { token: V, raw: new Uint8Array(1), headers: { 'Content-Length': '1' } })).status, 404);
+assert.equal((await call('PUT', '/api/docs/files/nope', { token: V, raw: new Uint8Array(1), headers: { 'Content-Length': '1' } })).status, 404);
+r = await call('POST', '/api/docs/files', { token: V, raw: new Uint8Array(4), headers: { 'Content-Length': '4', 'X-Deluxe-Name': encodeURIComponent(node.name), 'X-Deluxe-Mime': 'application/pdf' } });
+assert.equal(r.status, 201);
+const added = (await j(r)).node;
+assert.equal(added.name, 'Quarterly Report ü (2).pdf'); assert.equal(added.parentId, null); assert.equal(added.size, 4);
+r = await call('POST', '/api/docs/files', { token: V, raw: new Uint8Array(2), headers: { 'Content-Length': '2', 'X-Deluxe-Name': 'inside.txt', 'X-Deluxe-Parent': 'd_1' } });
+assert.equal((await j(r)).node.parentId, 'd_1');
+r = await call('POST', '/api/docs/files', { token: V, raw: new Uint8Array(2), headers: { 'Content-Length': '2', 'X-Deluxe-Name': encodeURIComponent('../a/b.txt'), 'X-Deluxe-Parent': 'f_1' } });
+const odd = (await j(r)).node; assert.equal(odd.parentId, null); assert.ok(!odd.name.includes('/'));
+await call('DELETE', `/api/db/nodes/${added.id}`, { token: T });
+await call('DELETE', `/api/db/nodes/${odd.id}`, { token: T });
+for (const n of (await j(await call('GET', '/api/db/nodes', { token: T }))).nodes) if (n.name === 'inside.txt') await call('DELETE', `/api/db/nodes/${n.id}`, { token: T });
+// put the original bytes back for the tests below
+await call('PUT', '/api/db/blobs/f_1', { token: T, raw: bytes, headers: { 'Content-Length': String(bytes.length) } });
+ok('docs key can save over a file and add new files');
+
 assert.equal((await call('PUT', '/api/db/nodes/f_1', { token: V, body: node })).status, 403);
 assert.equal((await call('DELETE', '/api/db/nodes/f_1', { token: V })).status, 403);
 assert.equal((await call('PUT', '/api/db/blobs/f_1', { token: V, raw: new Uint8Array(3), headers: { 'Content-Length': '3' } })).status, 403);

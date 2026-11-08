@@ -439,7 +439,7 @@ export async function generateLinkId() {
   return { linkId: String(data.linkId || ''), expiresIn: Number(data.expiresIn) || 60 };
 }
 
-function viewerUrl(fileUrl, name) {
+function viewerUrl(fileUrl, name, id) {
   const settings = docsSettings();
   let target;
   try {
@@ -452,6 +452,8 @@ function viewerUrl(fileUrl, name) {
   // `?url=`); `name` only sets the tab's title.
   target.searchParams.set('url', fileUrl);
   if (name) target.searchParams.set('name', name);
+  // The file's id lets Deluxe Docs save an edited copy back over this file.
+  if (id) target.searchParams.set('id', id);
   return target.toString();
 }
 
@@ -467,7 +469,7 @@ export async function openInDocs(node) {
 
   try {
     const share = await shareFile(node.id);
-    const url = viewerUrl(share.url, node.name);
+    const url = viewerUrl(share.url, node.name, node.id);
 
     if (!url) throw new Error('The Deluxe Docs address is not valid.');
 

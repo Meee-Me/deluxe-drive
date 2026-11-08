@@ -742,11 +742,13 @@ export class HubCore {
     if (!session) return [null, json(401, { error: 'Sign in to Deluxe Drive again.', code: 'unauthorized' })];
 
     // The key Deluxe Docs gets for a link id may read the file list and the
-    // files, and nothing else.
+    // files, and save edited files (change one, or add a new one). It cannot
+    // delete, rename, move, share or touch settings.
     if (session.clientId) {
       const path = new URL(request.url).pathname;
       const reading = request.method === 'GET' || request.method === 'HEAD';
-      if (!reading || !/^\/api\/(db\/(nodes|blobs)(\/|$)|auth\/me$)/.test(path)) {
+      const saving = (request.method === 'PUT' || request.method === 'POST') && /^\/api\/docs\/files(\/|$)/.test(path);
+      if (!saving && (!reading || !/^\/api\/(db\/(nodes|blobs)(\/|$)|auth\/me$)/.test(path))) {
         return [null, json(403, { error: 'This connection can only read documents.', code: 'read-only' })];
       }
     }
@@ -1013,6 +1015,77 @@ export class HubCore {
     });
 
     r('GET', '/api/shared/:token', ({ request, params }) => this.serveShared(request, params.token));
+
+    // Deluxe Docs saves an edited file over the one it opened.
+    r('PUT', '/api/docs/files/:id', async ({ request, params }) => {
+      const [session, denied] = this.need(request);
+      if (denied) return denied;
+      const node = this.getNode(session.userId, params.id);
+      if (!node || node.type !== 'file' || node.trashed) return json(404, { error: 'That file is not in Deluxe Drive any more.' });
+      if (Number(request.headers.get('content-length') || 0) > this.maxUpload) {
+        return json(413, { error: 'That file is too large for this server.' });
+      }
+      const mime = String(request.headers.get('x-deluxe-mime') || node.mime || 'application/octet-stream').slice(0, 120);
+      const size = await this.saveBlob(session.userId, node.id, request, mime);
+      const saved = { ...node, size, mime, updatedAt: Date.now() };
+      this.putNode(session.userId, saved);
+      return json(200, { node: saved });
+    });
+
+    // Deluxe Docs saves a file as a new one in My Drive (or in a folder).
+    r('POST', '/api/docs/files', async ({ request }) => {
+      const [session, denied] = this.need(request);
+      if (denied) return denied;
+      if (Number(request.headers.get('content-length') || 0) > this.maxUpload) {
+        return json(413, { error: 'That file is too large for this server.' });
+      }
+      let name = '';
+      try {
+        name = decodeURIComponent(String(request.headers.get('x-deluxe-name') || ''));
+      } catch (error) {
+        name = '';
+      }
+      name = name.replace(/[\\/\u0000-\u001f]/g, ' ').trim().slice(0, 200) || 'Untitled';
+      const parentAsked = String(request.headers.get('x-deluxe-parent') || '');
+      const parent = parentAsked ? this.getNode(session.userId, parentAsked) : null;
+      const parentId = parent && parent.type === 'folder' && !parent.trashed ? parent.id : null;
+
+      // Same rule as the drive: no two items with one name in one folder.
+      const taken = new Set(
+        this.listNodes(session.userId)
+          .filter((item) => !item.trashed && (item.parentId || null) === parentId)
+          .map((item) => String(item.name).toLowerCase())
+      );
+      if (taken.has(name.toLowerCase())) {
+        const dot = name.lastIndexOf('.');
+        const stem = dot > 0 ? name.slice(0, dot) : name;
+        const ext = dot > 0 ? name.slice(dot) : '';
+        let n = 2;
+        while (taken.has(`${stem} (${n})${ext}`.toLowerCase())) n += 1;
+        name = `${stem} (${n})${ext}`;
+      }
+
+      const id = `n_${Date.now().toString(36)}_${randomToken(3)}`;
+      const mime = String(request.headers.get('x-deluxe-mime') || 'application/octet-stream').slice(0, 120);
+      const size = await this.saveBlob(session.userId, id, request, mime);
+      const now = Date.now();
+      const node = {
+        id,
+        ownerId: session.userId,
+        parentId,
+        type: 'file',
+        name,
+        mime,
+        size,
+        starred: false,
+        trashed: false,
+        trashedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.putNode(session.userId, node);
+      return json(201, { node });
+    });
 
     r('POST', '/api/link', async ({ request }) => {
       const [session, denied] = this.need(request);

@@ -1,0 +1,9 @@
+{
+  "name": "deluxe-drive",
+  "private": true,
+  "description": "Deluxe Drive: the page, plus its server (a Cloudflare Worker in worker/, a Vercel Function in api/).",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "pg": "8.13.1"
+  }
+}

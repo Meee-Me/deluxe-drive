@@ -1,0 +1,7 @@
+# Not part of the Vercel site. api/ (the server) and worker/hub.js (its code) stay.
+tests/
+server/
+Dockerfile
+netlify.toml
+wrangler.jsonc
+.github/

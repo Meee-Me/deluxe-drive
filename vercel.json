@@ -1,0 +1,15 @@
+{
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/hub?__p=/api/:path*" },
+    { "source": "/s/:token", "destination": "/api/hub?__p=/s/:token" }
+  ],
+  "functions": {
+    "api/hub.mjs": { "maxDuration": 60 }
+  },
+  "headers": [
+    {
+      "source": "/(|index.html|js/(.*)|styles.css|manifest.webmanifest)",
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }]
+    }
+  ]
+}

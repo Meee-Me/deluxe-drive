@@ -11,3 +11,8 @@ README.md
 node_modules
 .github/
 vercel.json
+api/
+package.json
+package-lock.json
+vercel.json
+.vercelignore

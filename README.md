@@ -82,6 +82,40 @@ server/store.js     accounts, files, share links and sessions on disk
 server/oauth.js     Authorization Code + PKCE for Deluxe Docs
 ```
 
+## On Vercel (the live drive)
+
+The drive lives at **https://deluxe-drive-xi.vercel.app**. Vercel serves the page, and a Vercel Function
+(`api/hub.mjs`) is its server: accounts, files, share links, and link IDs for Deluxe Docs and Deluxe
+Convert. It runs the same server code as the Cloudflare Worker (`worker/hub.js`) and keeps everything in
+**Postgres**, because a Vercel Function has no disk of its own.
+
+Set it up once:
+
+1. In Vercel, open the **deluxe-drive** project → **Storage** → **Create Database** → **Neon (Postgres)**
+   (the free plan is enough) → connect it to the project for all environments. Vercel then sets
+   `DATABASE_URL` (`POSTGRES_URL` also works).
+2. **Redeploy** (Deployments → ⋯ → Redeploy), so the function sees the new variable.
+3. Open https://deluxe-drive-xi.vercel.app/api/health. It should say `"ok":true`. The tables are made
+   on first use.
+
+Until a database is connected, `/api/health` answers that there is none, the page says so, and files
+stay in the browser as before.
+
+```
+api/hub.mjs        the Vercel Function: /api/* and /s/* (vercel.json rewrites them here)
+api/_pg.mjs        Postgres for the server code (? placeholders, BYTEA, BIGINT)
+vercel.json        the rewrites, function settings and cache headers
+.vercelignore      files that are not part of the Vercel site
+tests/vercel-dev.mjs   DATABASE_URL=postgres://... node tests/vercel-dev.mjs  (a local stand-in)
+```
+
+A Vercel Function takes about 4.5 MB per request, so bigger files go up in 4 MB pieces
+(`PUT /api/db/blobs/:id?offset=…&last=1`, and the same for `/api/import`). The page and Deluxe Convert
+do this by themselves; a file can still be up to 100 MB. Files are kept in the database in 1 MB pieces,
+so the database's size is the drive's size (0.5 GB on Neon's free plan).
+
+Tests: `PG_URL=postgres://... node tests/worker.test.mjs` runs the server tests on Postgres.
+
 ## On Cloudflare (Workers)
 
 The drive's server runs as a Cloudflare Worker on `*.workers.dev`: accounts, files, share links and
@@ -111,7 +145,7 @@ Tests: `node tests/worker.test.mjs` (SQLite) and `STORE=r2 node tests/worker.tes
 
 ## Deluxe Docs
 
-Deluxe Docs is a separate site (`https://deluxe-docs.deluxelordd.workers.dev`). To connect it:
+Deluxe Docs is a separate site (`https://deluxe-docs-iota.vercel.app`). To connect it:
 
 1. In the drive (running with its server), open the account menu (the avatar) → **Connect Deluxe Docs**.
 2. Press **Generate link ID**. A code like `62EJ-CBTD-V98W` appears and is copied.
@@ -126,7 +160,7 @@ guesses are slowed down per address.
 
 ## Deluxe Convert
 
-Deluxe Convert (`https://deluxe-convert-cloud.deluxelordd.workers.dev`) connects with a link ID too:
+Deluxe Convert (`https://deluxe-convert.vercel.app`) connects with a link ID too:
 account menu → **Connect Deluxe Convert** → **Generate link ID** → **Open Deluxe Convert** (or type the
 code into Convert's **Connect Deluxe Drive** box). Link IDs are made for one app: a Docs code does not
 work in Convert, and a Convert code does not work in Docs. Making a new one only ends the earlier code
@@ -164,6 +198,6 @@ Cloudflare Worker in `worker/` is the one with link IDs, and it is what the driv
 
 Directed by **Shivad Sujith**. AI support: **Claude**. Built with **FreeMilk**. Powered by
 **Netlify**. Other sites by Deluxe Lord — [YouTube Guider AI](https://youtube-guide-ai.netlify.app/),
-[Deluxe Convert](https://deluxe-convert-cloud.deluxelordd.workers.dev),
+[Deluxe Convert](https://deluxe-convert.vercel.app),
 [Deluxe Translate](https://deluxe-translate-8m27.netlify.app/). The same list is in the app: the
 **credits** link on the lock screen, or **Credits** in the account menu.

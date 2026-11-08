@@ -1746,8 +1746,8 @@ const CREDITS_SITES = [
   },
   {
     name: 'Deluxe Convert',
-    url: 'https://deluxe-convert-cloud.deluxelordd.workers.dev',
-    label: 'deluxe-convert-cloud.deluxelordd.workers.dev',
+    url: 'https://deluxe-convert.vercel.app',
+    label: 'deluxe-convert.vercel.app',
   },
   {
     name: 'Deluxe Translate',
@@ -1880,7 +1880,7 @@ function showLinkDialog(kind = 'docs') {
       <p class="dialog-msg">${
         online
           ? target.intro
-          : 'This needs the Deluxe Drive server. Open the drive at its workers.dev address and try again.'
+          : (cloud.serverProblem() || 'This needs the Deluxe Drive server. Open the drive at deluxe-drive-xi.vercel.app and try again.')
       }</p>
       <div class="link-id" id="link-id" hidden>
         <a class="btn primary link-id-open" id="link-id-open" href="#" target="_blank" rel="noopener noreferrer">Open ${target.name}</a>
@@ -2451,6 +2451,11 @@ function rememberUser(user) {
 async function initAuthScreen() {
   const buildNode = $('#auth-build');
   if (buildNode) buildNode.textContent = BUILD;
+
+  // The drive's server is there but cannot keep files yet: say so, so it is
+  // clear why files stay in this browser and Deluxe Docs / Convert cannot connect.
+  const problem = cloud.serverProblem();
+  if (problem) setTimeout(() => toast(problem), 400);
 
   if (cloud.isOnline()) {
     // The server never hands out a list of its accounts: only the name last

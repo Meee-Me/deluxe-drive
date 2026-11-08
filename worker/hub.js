@@ -176,6 +176,8 @@ async function readJsonBody(request) {
 /* ------------------------------------------------------------------ */
 
 const CHUNK = 1024 * 1024;
+// The size of each piece when a file is sent in several requests.
+const PART = 4 * CHUNK;
 
 function toBytes(value) {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
@@ -188,22 +190,31 @@ class SqlStore {
   constructor(sql) {
     this.sql = sql;
     this.name = 'sqlite';
+    this.parts = true;
   }
 
-  async put(key, body) {
-    this.sql.exec(`DELETE FROM chunks WHERE key = ?`, key);
+  async rows(query, ...params) {
+    return (await this.sql.exec(query, ...params)).toArray();
+  }
+
+  // Writes body as 1 MB rows starting at row `first`. A file sent in several
+  // requests (a Vercel Function takes about 4.5 MB per request) is written
+  // piece by piece: every piece but the last is a whole number of rows.
+  async putAt(key, first, body) {
     const buffer = new Uint8Array(CHUNK);
     let filled = 0;
-    let index = 0;
+    let index = first;
     let size = 0;
 
-    const flush = () => {
+    const flush = async () => {
       if (!filled) return;
-      this.sql.exec(`INSERT INTO chunks (key, idx, data) VALUES (?, ?, ?)`, key, index, buffer.slice(0, filled).buffer);
+      const data = buffer.slice(0, filled).buffer;
+      const at = index;
       index += 1;
       filled = 0;
+      await this.sql.exec(`INSERT INTO chunks (key, idx, data) VALUES (?, ?, ?)`, key, at, data);
     };
-    const feed = (bytes) => {
+    const feed = async (bytes) => {
       let offset = 0;
       while (offset < bytes.length) {
         const take = Math.min(CHUNK - filled, bytes.length - offset);
@@ -211,46 +222,57 @@ class SqlStore {
         filled += take;
         offset += take;
         size += take;
-        if (filled === CHUNK) flush();
+        if (filled === CHUNK) await flush();
       }
     };
 
+    await this.sql.exec(`DELETE FROM chunks WHERE key = ? AND idx >= ?`, key, first);
     try {
       if (body && typeof body.getReader === 'function') {
         const reader = body.getReader();
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
-          feed(toBytes(value));
+          await feed(toBytes(value));
         }
       } else if (body) {
-        feed(toBytes(body));
+        await feed(toBytes(body));
       }
-      flush();
+      await flush();
     } catch (error) {
-      this.sql.exec(`DELETE FROM chunks WHERE key = ?`, key);
+      await this.sql.exec(`DELETE FROM chunks WHERE key = ? AND idx >= ?`, key, first);
       throw error;
     }
-    return { size };
+    return { size, rows: index - first };
+  }
+
+  async put(key, body) {
+    await this.sql.exec(`DELETE FROM chunks WHERE key = ?`, key);
+    return this.putAt(key, 0, body);
+  }
+
+  async total(key) {
+    const row = (await this.rows(`SELECT COALESCE(SUM(LENGTH(data)), 0) AS n FROM chunks WHERE key = ?`, key))[0];
+    return Number(row && row.n) || 0;
   }
 
   async get(key, options) {
-    const total = this.sql.exec(`SELECT COALESCE(SUM(LENGTH(data)), 0) AS n FROM chunks WHERE key = ?`, key).toArray()[0].n;
+    const total = await this.total(key);
     if (!total) return null;
 
     const start = options && options.range ? options.range.offset : 0;
     const end = Math.min(total, options && options.range ? options.range.offset + options.range.length : total);
     let position = start;
-    const sql = this.sql;
+    const store = this;
 
     const body = new ReadableStream({
-      pull(controller) {
+      async pull(controller) {
         if (position >= end) {
           controller.close();
           return;
         }
         const index = Math.floor(position / CHUNK);
-        const row = sql.exec(`SELECT data FROM chunks WHERE key = ? AND idx = ?`, key, index).toArray()[0];
+        const row = (await store.rows(`SELECT data FROM chunks WHERE key = ? AND idx = ?`, key, index))[0];
         if (!row) {
           controller.error(new Error('A stored file is missing a piece.'));
           return;
@@ -266,11 +288,11 @@ class SqlStore {
   }
 
   async delete(keys) {
-    for (const key of [].concat(keys)) this.sql.exec(`DELETE FROM chunks WHERE key = ?`, key);
+    for (const key of [].concat(keys)) await this.sql.exec(`DELETE FROM chunks WHERE key = ?`, key);
   }
 
   async deletePrefix(prefix) {
-    this.sql.exec(`DELETE FROM chunks WHERE substr(key, 1, ?) = ?`, prefix.length, prefix);
+    await this.sql.exec(`DELETE FROM chunks WHERE substr(key, 1, ?) = ?`, prefix.length, prefix);
   }
 }
 
@@ -278,6 +300,7 @@ class R2Store {
   constructor(bucket) {
     this.bucket = bucket;
     this.name = 'r2';
+    this.parts = false;
   }
 
   put(key, body, options) {
@@ -313,30 +336,44 @@ export class HubCore {
     this.env = env || {};
     this.failures = new Map();
     this.store = null;
-    for (const statement of SCHEMA) this.sql.exec(statement);
-    // Databases made before Deluxe Convert could connect have no client column.
-    try {
-      this.sql.exec(`ALTER TABLE link_codes ADD COLUMN client TEXT`);
-    } catch (error) {
-      /* already there */
-    }
+    this.readyPromise = null;
     this.store = this.env.FILES ? new R2Store(this.env.FILES) : new SqlStore(this.sql);
     this.routes = [];
     this.defineRoutes();
   }
 
+  // Makes the tables on first use. Durable Objects answer at once; Postgres
+  // (on Vercel) is asked over the network, so this is awaited once per instance.
+  ready() {
+    if (!this.readyPromise) {
+      this.readyPromise = (async () => {
+        for (const statement of SCHEMA) await this.sql.exec(statement);
+        // Databases made before Deluxe Convert could connect have no client column.
+        try {
+          await this.sql.exec(`ALTER TABLE link_codes ADD COLUMN client TEXT`);
+        } catch (error) {
+          /* already there */
+        }
+      })().catch((error) => {
+        this.readyPromise = null;
+        throw error;
+      });
+    }
+    return this.readyPromise;
+  }
+
   /* ---------------- storage helpers ---------------- */
 
-  all(query, ...params) {
-    return this.sql.exec(query, ...params).toArray();
+  async all(query, ...params) {
+    return (await this.sql.exec(query, ...params)).toArray();
   }
 
-  one(query, ...params) {
-    return this.all(query, ...params)[0] || null;
+  async one(query, ...params) {
+    return (await this.all(query, ...params))[0] || null;
   }
 
-  run(query, ...params) {
-    this.sql.exec(query, ...params);
+  async run(query, ...params) {
+    await this.sql.exec(query, ...params);
   }
 
   get files() {
@@ -345,6 +382,11 @@ export class HubCore {
 
   get maxUpload() {
     return Number(this.env.MAX_UPLOAD_BYTES) > 0 ? Number(this.env.MAX_UPLOAD_BYTES) : 100 * 1024 * 1024;
+  }
+
+  // The most one request may carry. A Vercel Function takes about 4.5 MB.
+  get maxRequest() {
+    return Number(this.env.MAX_REQUEST_BYTES) > 0 ? Number(this.env.MAX_REQUEST_BYTES) : this.maxUpload;
   }
 
   blobKey(accountId, blobId) {
@@ -362,18 +404,18 @@ export class HubCore {
     return { id: account.id, name: account.name, salt: account.salt };
   }
 
-  accountById(id) {
+  async accountById(id) {
     if (!ID_PATTERN.test(String(id || ''))) return null;
-    return this.one(`SELECT * FROM accounts WHERE id = ?`, id);
+    return await this.one(`SELECT * FROM accounts WHERE id = ?`, id);
   }
 
-  accountByName(name) {
+  async accountByName(name) {
     const clean = String(name || '').trim().toLowerCase();
     if (!clean) return null;
-    return this.one(`SELECT * FROM accounts WHERE name_lc = ?`, clean);
+    return await this.one(`SELECT * FROM accounts WHERE name_lc = ?`, clean);
   }
 
-  createAccount({ name, salt, hash }) {
+  async createAccount({ name, salt, hash }) {
     const cleanName = String(name || '').trim().slice(0, 24);
     const cleanSalt = String(salt || '');
     const cleanHash = String(hash || '');
@@ -382,11 +424,11 @@ export class HubCore {
     if (!HEX_PATTERN.test(cleanSalt) || !HEX_PATTERN.test(cleanHash)) {
       throw requestError('That account record is not valid.', 400);
     }
-    if (this.accountByName(cleanName)) throw requestError('That name is already used on this drive.', 409, 'name-taken');
+    if (await this.accountByName(cleanName)) throw requestError('That name is already used on this drive.', 409, 'name-taken');
 
     const now = Date.now();
     const id = `u_${now.toString(36)}_${randomToken(3)}`;
-    this.run(
+    await this.run(
       `INSERT INTO accounts (id, name, name_lc, salt, hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       id,
       cleanName,
@@ -396,7 +438,7 @@ export class HubCore {
       now,
       now
     );
-    return this.accountById(id);
+    return await this.accountById(id);
   }
 
   // A name nobody owns still gets a plausible looking record, so asking for it
@@ -405,11 +447,11 @@ export class HubCore {
   async fakeAccount(name) {
     let secret = this.env.DELUXE_FAKE_SECRET || '';
     if (!secret) {
-      const row = this.one(`SELECT value FROM meta WHERE key = 'fake-secret'`);
+      const row = await this.one(`SELECT value FROM meta WHERE key = 'fake-secret'`);
       if (row) secret = row.value;
       else {
         secret = randomToken(24);
-        this.run(`INSERT OR IGNORE INTO meta (key, value) VALUES ('fake-secret', ?)`, secret);
+        await this.run(`INSERT INTO meta (key, value) VALUES ('fake-secret', ?) ON CONFLICT DO NOTHING`, secret);
       }
     }
     const clean = String(name || '').trim().slice(0, 24);
@@ -418,34 +460,34 @@ export class HubCore {
     return { id: `u_unknown_${digest.slice(0, 16)}`, name: clean, salt: digest.slice(0, 32) };
   }
 
-  renameAccount(id, name) {
+  async renameAccount(id, name) {
     const clean = String(name || '').trim().slice(0, 24);
     if (!clean) throw requestError('Type a name for the account.', 400);
-    const account = this.accountById(id);
+    const account = await this.accountById(id);
     if (!account) throw requestError('That account is not here.', 404);
-    const other = this.accountByName(clean);
+    const other = await this.accountByName(clean);
     if (other && other.id !== id) throw requestError('That name is already used on this drive.', 409);
-    this.run(`UPDATE accounts SET name = ?, name_lc = ?, updated_at = ? WHERE id = ?`, clean, clean.toLowerCase(), Date.now(), id);
-    return this.accountById(id);
+    await this.run(`UPDATE accounts SET name = ?, name_lc = ?, updated_at = ? WHERE id = ?`, clean, clean.toLowerCase(), Date.now(), id);
+    return await this.accountById(id);
   }
 
-  setAccountPassword(id, salt, hash) {
+  async setAccountPassword(id, salt, hash) {
     const cleanSalt = String(salt || '');
     const cleanHash = String(hash || '');
     if (!HEX_PATTERN.test(cleanSalt) || !HEX_PATTERN.test(cleanHash)) {
       throw requestError('That account record is not valid.', 400);
     }
-    if (!this.accountById(id)) throw requestError('That account is not found.', 404);
-    this.run(`UPDATE accounts SET salt = ?, hash = ?, updated_at = ? WHERE id = ?`, cleanSalt, cleanHash, Date.now(), id);
+    if (!await this.accountById(id)) throw requestError('That account is not found.', 404);
+    await this.run(`UPDATE accounts SET salt = ?, hash = ?, updated_at = ? WHERE id = ?`, cleanSalt, cleanHash, Date.now(), id);
   }
 
   async deleteAccount(id) {
-    if (!this.accountById(id)) return false;
-    this.run(`DELETE FROM accounts WHERE id = ?`, id);
-    for (const table of ['nodes', 'settings', 'blobs']) this.run(`DELETE FROM ${table} WHERE account_id = ?`, id);
-    this.run(`DELETE FROM shares WHERE account_id = ?`, id);
-    this.run(`DELETE FROM link_codes WHERE account_id = ?`, id);
-    this.run(`DELETE FROM sessions WHERE user_id = ?`, id);
+    if (!await this.accountById(id)) return false;
+    await this.run(`DELETE FROM accounts WHERE id = ?`, id);
+    for (const table of ['nodes', 'settings', 'blobs']) await this.run(`DELETE FROM ${table} WHERE account_id = ?`, id);
+    await this.run(`DELETE FROM shares WHERE account_id = ?`, id);
+    await this.run(`DELETE FROM link_codes WHERE account_id = ?`, id);
+    await this.run(`DELETE FROM sessions WHERE user_id = ?`, id);
     await this.deleteBlobPrefix(`b/${id}/`);
     return true;
   }
@@ -472,20 +514,20 @@ export class HubCore {
 
   /* ---------------- nodes and settings ---------------- */
 
-  listNodes(accountId) {
-    return this.all(`SELECT json FROM nodes WHERE account_id = ?`, accountId).map((row) => JSON.parse(row.json));
+  async listNodes(accountId) {
+    return (await this.all(`SELECT json FROM nodes WHERE account_id = ?`, accountId)).map((row) => JSON.parse(row.json));
   }
 
-  getNode(accountId, nodeId) {
+  async getNode(accountId, nodeId) {
     if (!ID_PATTERN.test(String(nodeId || ''))) return null;
-    const row = this.one(`SELECT json FROM nodes WHERE account_id = ? AND id = ?`, accountId, nodeId);
+    const row = await this.one(`SELECT json FROM nodes WHERE account_id = ? AND id = ?`, accountId, nodeId);
     return row ? JSON.parse(row.json) : null;
   }
 
-  putNode(accountId, node) {
+  async putNode(accountId, node) {
     if (!node || typeof node !== 'object') throw requestError('That file record is not valid.', 400);
     if (!ID_PATTERN.test(String(node.id || ''))) throw requestError('That file id is not valid.', 400);
-    this.run(
+    await this.run(
       `INSERT INTO nodes (account_id, id, json) VALUES (?, ?, ?)
        ON CONFLICT (account_id, id) DO UPDATE SET json = excluded.json`,
       accountId,
@@ -494,30 +536,30 @@ export class HubCore {
     );
   }
 
-  putNodes(accountId, nodes) {
+  async putNodes(accountId, nodes) {
     if (!Array.isArray(nodes)) throw requestError('That list of files is not valid.', 400);
     for (const node of nodes) {
       if (!node || typeof node !== 'object' || !ID_PATTERN.test(String(node.id || ''))) {
         throw requestError('One of those file records is not valid.', 400);
       }
     }
-    for (const node of nodes) this.putNode(accountId, node);
+    for (const node of nodes) await this.putNode(accountId, node);
     return nodes.length;
   }
 
-  deleteNode(accountId, nodeId) {
+  async deleteNode(accountId, nodeId) {
     if (!ID_PATTERN.test(String(nodeId || ''))) return false;
-    this.run(`DELETE FROM nodes WHERE account_id = ? AND id = ?`, accountId, nodeId);
+    await this.run(`DELETE FROM nodes WHERE account_id = ? AND id = ?`, accountId, nodeId);
     return true;
   }
 
-  getSetting(accountId, key) {
-    const row = this.one(`SELECT json FROM settings WHERE account_id = ? AND key = ?`, accountId, key);
+  async getSetting(accountId, key) {
+    const row = await this.one(`SELECT json FROM settings WHERE account_id = ? AND key = ?`, accountId, key);
     return row ? JSON.parse(row.json) : undefined;
   }
 
-  putSetting(accountId, key, value) {
-    this.run(
+  async putSetting(accountId, key, value) {
+    await this.run(
       `INSERT INTO settings (account_id, key, json) VALUES (?, ?, ?)
        ON CONFLICT (account_id, key) DO UPDATE SET json = excluded.json`,
       accountId,
@@ -526,14 +568,14 @@ export class HubCore {
     );
   }
 
-  deleteSetting(accountId, key) {
-    this.run(`DELETE FROM settings WHERE account_id = ? AND key = ?`, accountId, key);
+  async deleteSetting(accountId, key) {
+    await this.run(`DELETE FROM settings WHERE account_id = ? AND key = ?`, accountId, key);
   }
 
   /* ---------------- file contents ---------------- */
 
-  blobInfo(accountId, blobId) {
-    const row = this.one(`SELECT mime, size, updated_at FROM blobs WHERE account_id = ? AND id = ?`, accountId, blobId);
+  async blobInfo(accountId, blobId) {
+    const row = await this.one(`SELECT mime, size, updated_at FROM blobs WHERE account_id = ? AND id = ?`, accountId, blobId);
     const key = this.blobKey(accountId, blobId);
     if (!row || !key) return null;
     return { key, size: Number(row.size) || 0, mime: row.mime || 'application/octet-stream', updatedAt: row.updated_at };
@@ -556,7 +598,7 @@ export class HubCore {
     }
 
     const size = Number(object && object.size) || 0;
-    this.run(
+    await this.run(
       `INSERT INTO blobs (account_id, id, mime, size, updated_at) VALUES (?, ?, ?, ?, ?)
        ON CONFLICT (account_id, id) DO UPDATE SET mime = excluded.mime, size = excluded.size, updated_at = excluded.updated_at`,
       accountId,
@@ -568,19 +610,60 @@ export class HubCore {
     return size;
   }
 
+  // One piece of a file sent in several requests: ?offset=<bytes>, and
+  // ?last=1 on the final piece. Each piece but the last is a whole number of
+  // 1 MB rows. The file only becomes readable once the last piece is in.
+  async saveBlobPart(accountId, blobId, request, mime, offset, last) {
+    const key = this.blobKey(accountId, blobId);
+    if (!key) throw requestError('That file id is not valid.', 400);
+    if (!this.files.parts) throw requestError('Send this file in one request.', 400);
+    if (!Number.isInteger(offset) || offset < 0 || offset % CHUNK || offset >= this.maxUpload) {
+      throw requestError('That piece of the file is not valid.', 400);
+    }
+    if (offset === 0) {
+      await this.run(`DELETE FROM blobs WHERE account_id = ? AND id = ?`, accountId, blobId);
+      await this.files.delete(key);
+    } else if ((await this.files.total(key)) !== offset) {
+      throw requestError('A piece of this file is missing. Send it again.', 409);
+    }
+    const { size } = await this.files.putAt(key, offset / CHUNK, request.body || (await request.arrayBuffer()));
+    if (!last && (!size || size % CHUNK)) {
+      await this.files.delete(key);
+      throw requestError('That piece of the file is not valid.', 400);
+    }
+    const total = offset + size;
+    if (total > this.maxUpload) {
+      await this.files.delete(key);
+      throw requestError('That file is too large for this server.', 413);
+    }
+    if (last) {
+      const cleanMime = String(mime || 'application/octet-stream').slice(0, 120);
+      await this.run(
+        `INSERT INTO blobs (account_id, id, mime, size, updated_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (account_id, id) DO UPDATE SET mime = excluded.mime, size = excluded.size, updated_at = excluded.updated_at`,
+        accountId,
+        blobId,
+        cleanMime,
+        total,
+        Date.now()
+      );
+    }
+    return { received: total, done: !!last };
+  }
+
   async deleteBlob(accountId, blobId) {
     const key = this.blobKey(accountId, blobId);
     if (!key) return false;
     await this.files.delete(key);
-    this.run(`DELETE FROM blobs WHERE account_id = ? AND id = ?`, accountId, blobId);
+    await this.run(`DELETE FROM blobs WHERE account_id = ? AND id = ?`, accountId, blobId);
     return true;
   }
 
   async clearAccountData(accountId) {
-    this.run(`DELETE FROM nodes WHERE account_id = ?`, accountId);
-    this.run(`DELETE FROM settings WHERE account_id = ?`, accountId);
-    this.run(`DELETE FROM blobs WHERE account_id = ?`, accountId);
-    this.run(`DELETE FROM shares WHERE account_id = ?`, accountId);
+    await this.run(`DELETE FROM nodes WHERE account_id = ?`, accountId);
+    await this.run(`DELETE FROM settings WHERE account_id = ?`, accountId);
+    await this.run(`DELETE FROM blobs WHERE account_id = ?`, accountId);
+    await this.run(`DELETE FROM shares WHERE account_id = ?`, accountId);
     await this.deleteBlobPrefix(`b/${accountId}/`);
   }
 
@@ -639,9 +722,9 @@ export class HubCore {
 
   // A name not yet used among the folder's (not trashed) items: "a.pdf",
   // then "a (1).pdf", "a (2).pdf", ...
-  uniqueChildName(accountId, parentId, name) {
+  async uniqueChildName(accountId, parentId, name) {
     const taken = new Set(
-      this.listNodes(accountId)
+      (await this.listNodes(accountId))
         .filter((node) => !node.trashed && (node.parentId || null) === parentId)
         .map((node) => String(node.name || '').toLowerCase())
     );
@@ -656,8 +739,8 @@ export class HubCore {
     return `${stem} (${Date.now()})${tail}`;
   }
 
-  importFolder(accountId) {
-    const existing = this.listNodes(accountId).find(
+  async importFolder(accountId) {
+    const existing = (await this.listNodes(accountId)).find(
       (node) =>
         node.type === 'folder' &&
         !node.trashed &&
@@ -671,7 +754,7 @@ export class HubCore {
       ownerId: accountId,
       parentId: null,
       type: 'folder',
-      name: this.uniqueChildName(accountId, null, IMPORT_FOLDER),
+      name: await this.uniqueChildName(accountId, null, IMPORT_FOLDER),
       mime: '',
       size: 0,
       starred: false,
@@ -680,7 +763,7 @@ export class HubCore {
       createdAt: now,
       updatedAt: now,
     };
-    this.putNode(accountId, folder);
+    await this.putNode(accountId, folder);
     return folder.id;
   }
 
@@ -695,14 +778,19 @@ export class HubCore {
       await this.deleteBlob(accountId, id);
       throw requestError('That file is too large for Deluxe Drive.', 413);
     }
-    const parentId = this.importFolder(accountId);
+    return this.finishImport(accountId, id, name, mime, size);
+  }
+
+  // The file's contents are stored under id; this files it in the drive.
+  async finishImport(accountId, id, name, mime, size) {
+    const parentId = await this.importFolder(accountId);
     const now = Date.now();
     const node = {
       id,
       ownerId: accountId,
       parentId,
       type: 'file',
-      name: this.uniqueChildName(accountId, parentId, name),
+      name: await this.uniqueChildName(accountId, parentId, name),
       mime,
       size,
       starred: false,
@@ -712,17 +800,17 @@ export class HubCore {
       updatedAt: now,
       source: 'deluxe-convert',
     };
-    this.putNode(accountId, node);
+    await this.putNode(accountId, node);
     return node;
   }
 
   /* ---------------- share links ---------------- */
 
-  ensureShare(accountId, blobId, name) {
-    const existing = this.one(`SELECT token FROM shares WHERE account_id = ? AND blob_id = ?`, accountId, blobId);
+  async ensureShare(accountId, blobId, name) {
+    const existing = await this.one(`SELECT token FROM shares WHERE account_id = ? AND blob_id = ?`, accountId, blobId);
     if (existing) return existing.token;
     const token = randomToken(16);
-    this.run(
+    await this.run(
       `INSERT INTO shares (token, account_id, blob_id, name, created_at) VALUES (?, ?, ?, ?, ?)`,
       token,
       accountId,
@@ -733,17 +821,17 @@ export class HubCore {
     return token;
   }
 
-  shareByToken(token) {
+  async shareByToken(token) {
     if (!/^[0-9a-f]{8,64}$/i.test(String(token || ''))) return null;
-    return this.one(`SELECT * FROM shares WHERE token = ?`, token);
+    return await this.one(`SELECT * FROM shares WHERE token = ?`, token);
   }
 
-  revokeShare(accountId, blobId) {
-    this.run(`DELETE FROM shares WHERE account_id = ? AND blob_id = ?`, accountId, blobId);
+  async revokeShare(accountId, blobId) {
+    await this.run(`DELETE FROM shares WHERE account_id = ? AND blob_id = ?`, accountId, blobId);
   }
 
-  listShares(accountId) {
-    return this.all(`SELECT * FROM shares WHERE account_id = ? ORDER BY created_at DESC`, accountId);
+  async listShares(accountId) {
+    return await this.all(`SELECT * FROM shares WHERE account_id = ? ORDER BY created_at DESC`, accountId);
   }
 
   /* ---------------- link ids for Deluxe Docs ---------------- */
@@ -775,14 +863,14 @@ export class HubCore {
     let raw = '';
     for (const byte of bytes) raw += LINK_ALPHABET[byte % LINK_ALPHABET.length];
     const now = Date.now();
-    this.run(`DELETE FROM link_codes WHERE expires_at <= ?`, now);
-    this.run(
+    await this.run(`DELETE FROM link_codes WHERE expires_at <= ?`, now);
+    await this.run(
       `DELETE FROM link_codes WHERE account_id = ? AND COALESCE(client, ?) = ?`,
       accountId,
       DEFAULT_LINK_APP,
       app
     );
-    this.run(
+    await this.run(
       `INSERT INTO link_codes (code_hash, account_id, expires_at, client) VALUES (?, ?, ?, ?)`,
       await this.hashLinkId(raw),
       accountId,
@@ -798,24 +886,24 @@ export class HubCore {
     const clean = HubCore.cleanLinkId(value);
     if (clean.length !== 12) return null;
     const hash = await this.hashLinkId(clean);
-    const row = this.one(`SELECT account_id, expires_at, client FROM link_codes WHERE code_hash = ?`, hash);
+    const row = await this.one(`SELECT account_id, expires_at, client FROM link_codes WHERE code_hash = ?`, hash);
     if (!row) return null;
     const madeFor = row.client || DEFAULT_LINK_APP;
     if (madeFor !== app && row.expires_at > Date.now()) return { wrongApp: madeFor };
-    this.run(`DELETE FROM link_codes WHERE code_hash = ?`, hash);
+    await this.run(`DELETE FROM link_codes WHERE code_hash = ?`, hash);
     if (row.expires_at <= Date.now()) return null;
-    const account = this.accountById(row.account_id);
+    const account = await this.accountById(row.account_id);
     return account ? { account } : null;
   }
 
   /* ---------------- sessions ---------------- */
 
-  createSession(userId, options = {}) {
+  async createSession(userId, options = {}) {
     const ttlSeconds = Number(options.ttlSeconds) > 0 ? Number(options.ttlSeconds) : SESSION_TTL_SECONDS;
     const now = Date.now();
-    this.run(`DELETE FROM sessions WHERE expires_at <= ?`, now);
+    await this.run(`DELETE FROM sessions WHERE expires_at <= ?`, now);
     const token = randomToken(32);
-    this.run(
+    await this.run(
       `INSERT INTO sessions (token, user_id, client_id, scope, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
       token,
       userId,
@@ -827,20 +915,20 @@ export class HubCore {
     return { token, expiresIn: ttlSeconds };
   }
 
-  sessionFor(token) {
+  async sessionFor(token) {
     const clean = String(token || '');
     if (!clean) return null;
-    const row = this.one(`SELECT * FROM sessions WHERE token = ?`, clean);
+    const row = await this.one(`SELECT * FROM sessions WHERE token = ?`, clean);
     if (!row) return null;
     if (row.expires_at <= Date.now()) {
-      this.run(`DELETE FROM sessions WHERE token = ?`, clean);
+      await this.run(`DELETE FROM sessions WHERE token = ?`, clean);
       return null;
     }
     return { token: row.token, userId: row.user_id, clientId: row.client_id, scope: row.scope };
   }
 
-  dropSession(token) {
-    this.run(`DELETE FROM sessions WHERE token = ?`, String(token || ''));
+  async dropSession(token) {
+    await this.run(`DELETE FROM sessions WHERE token = ?`, String(token || ''));
   }
 
   /* ---------------- routes ---------------- */
@@ -868,9 +956,9 @@ export class HubCore {
   }
 
   // Returns [session, null], or [null, a 401 response].
-  need(request) {
+  async need(request) {
     const token = bearerToken(request);
-    const session = token ? this.sessionFor(token) : null;
+    const session = token ? await this.sessionFor(token) : null;
     if (!session) return [null, json(401, { error: 'Sign in to Deluxe Drive again.', code: 'unauthorized' })];
 
     // The key Deluxe Convert gets for a link id may add files and say whose
@@ -906,7 +994,7 @@ export class HubCore {
     const r = (method, pattern, handler) => this.route(method, pattern, handler);
     const origin = (url) => url.origin;
 
-    r('GET', '/api/health', () =>
+    r('GET', '/api/health', async () =>
       json(200, {
         ok: true,
         name: SERVER_NAME,
@@ -916,7 +1004,12 @@ export class HubCore {
         version: 'worker 2',
         linkIds: { create: '/api/link', redeem: '/api/link/redeem', seconds: LINK_TTL_SECONDS, apps: Object.keys(LINK_APPS) },
         import: '/api/import',
-        limits: { uploadBytes: this.maxUpload },
+        limits: {
+          uploadBytes: this.maxUpload,
+          // Bigger files are sent in pieces of partBytes (see saveBlobPart).
+          requestBytes: this.maxRequest,
+          partBytes: this.files.parts ? PART : 0,
+        },
       })
     );
 
@@ -926,20 +1019,20 @@ export class HubCore {
       if (this.tooManyFailures(`session:${userId}`)) {
         return json(429, { error: 'Too many wrong tries. Wait a few minutes and try again.', code: 'rate-limited' });
       }
-      const account = this.accountById(userId);
+      const account = await this.accountById(userId);
       if (!account || !safeEqual(account.hash, String(body.hash || ''))) {
         this.noteFailure(`session:${userId}`);
         return json(401, { error: 'That account did not match.', code: 'unauthorized' });
       }
       this.clearFailures(`session:${userId}`);
-      const session = this.createSession(account.id, { scope: 'drive', ttlSeconds: SESSION_TTL_SECONDS });
+      const session = await this.createSession(account.id, { scope: 'drive', ttlSeconds: SESSION_TTL_SECONDS });
       return json(200, { token: session.token, expiresIn: session.expiresIn, user: { id: account.id, name: account.name } });
     });
 
-    r('GET', '/api/auth/me', ({ request }) => {
-      const [session, denied] = this.need(request);
+    r('GET', '/api/auth/me', async ({ request }) => {
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
-      const account = this.accountById(session.userId);
+      const account = await this.accountById(session.userId);
       if (!account) return json(401, { error: 'Sign in to Deluxe Drive again.', code: 'unauthorized' });
       return json(200, { user: { id: account.id, name: account.name } });
     });
@@ -948,7 +1041,7 @@ export class HubCore {
       const body = await readJsonBody(request);
       let account;
       try {
-        account = this.createAccount({ name: body.name, salt: body.salt, hash: body.hash });
+        account = await this.createAccount({ name: body.name, salt: body.salt, hash: body.hash });
       } catch (error) {
         const status = error.status || 500;
         return json(status, {
@@ -956,7 +1049,7 @@ export class HubCore {
           code: error.code || (status === 409 ? 'name-taken' : 'create-failed'),
         });
       }
-      const session = this.createSession(account.id, { scope: 'drive', ttlSeconds: SESSION_TTL_SECONDS });
+      const session = await this.createSession(account.id, { scope: 'drive', ttlSeconds: SESSION_TTL_SECONDS });
       return json(201, { token: session.token, expiresIn: session.expiresIn, user: { id: account.id, name: account.name } });
     });
 
@@ -964,24 +1057,24 @@ export class HubCore {
       const body = await readJsonBody(request);
       const name = String(body.name || '').trim();
       if (!name) return json(400, { error: 'Type your account name.' });
-      const account = this.accountByName(name);
+      const account = await this.accountByName(name);
       return json(200, account ? this.publicAccount(account) : await this.fakeAccount(name));
     });
 
-    r('GET', '/api/accounts/:id', ({ params }) => {
-      const account = this.accountById(params.id);
+    r('GET', '/api/accounts/:id', async ({ params }) => {
+      const account = await this.accountById(params.id);
       if (!account) return json(404, { error: 'That account is not here.' });
       return json(200, this.publicAccount(account));
     });
 
     r('PATCH', '/api/accounts/:id', async ({ request, params }) => {
-      const [session, denied] = this.need(request);
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
       const notYours = this.own(session, params.id);
       if (notYours) return notYours;
       const body = await readJsonBody(request);
       try {
-        const account = this.renameAccount(session.userId, body.name);
+        const account = await this.renameAccount(session.userId, body.name);
         return json(200, { user: { id: account.id, name: account.name } });
       } catch (error) {
         return json(error.status || 500, { error: error.message || 'That name could not be saved.' });
@@ -989,17 +1082,17 @@ export class HubCore {
     });
 
     r('POST', '/api/accounts/:id/password', async ({ request, params }) => {
-      const [session, denied] = this.need(request);
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
       const notYours = this.own(session, params.id);
       if (notYours) return notYours;
       const body = await readJsonBody(request);
-      const account = this.accountById(session.userId);
+      const account = await this.accountById(session.userId);
       if (!account || !safeEqual(account.hash, String(body.currentHash || ''))) {
         return json(401, { error: 'That password is not correct.', code: 'unauthorized' });
       }
       try {
-        this.setAccountPassword(session.userId, body.salt, body.hash);
+        await this.setAccountPassword(session.userId, body.salt, body.hash);
         return json(200, { ok: true });
       } catch (error) {
         return json(error.status || 500, { error: error.message || 'That password could not be saved.' });
@@ -1007,7 +1100,7 @@ export class HubCore {
     });
 
     r('DELETE', '/api/accounts/:id', async ({ request, params }) => {
-      const [session, denied] = this.need(request);
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
       const notYours = this.own(session, params.id);
       if (notYours) return notYours;
@@ -1016,37 +1109,37 @@ export class HubCore {
       return json(200, { ok: true });
     });
 
-    r('GET', '/api/db/nodes', ({ request }) => {
-      const [session, denied] = this.need(request);
+    r('GET', '/api/db/nodes', async ({ request }) => {
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
-      return json(200, { nodes: this.listNodes(session.userId) });
+      return json(200, { nodes: await this.listNodes(session.userId) });
     });
 
-    r('GET', '/api/db/nodes/:id', ({ request, params }) => {
-      const [session, denied] = this.need(request);
+    r('GET', '/api/db/nodes/:id', async ({ request, params }) => {
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
-      const node = this.getNode(session.userId, params.id);
+      const node = await this.getNode(session.userId, params.id);
       return node ? json(200, { node }) : json(404, { error: 'That file is not here.' });
     });
 
     r('POST', '/api/db/nodes', async ({ request }) => {
-      const [session, denied] = this.need(request);
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
       const body = await readJsonBody(request);
       try {
-        return json(200, { ok: true, count: this.putNodes(session.userId, body.nodes) });
+        return json(200, { ok: true, count: await this.putNodes(session.userId, body.nodes) });
       } catch (error) {
         return json(error.status || 400, { error: error.message || 'Those files could not be saved.' });
       }
     });
 
     r('PUT', '/api/db/nodes/:id', async ({ request, params }) => {
-      const [session, denied] = this.need(request);
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
       const body = await readJsonBody(request);
       const node = { ...body, id: params.id };
       try {
-        this.putNode(session.userId, node);
+        await this.putNode(session.userId, node);
         return json(200, { ok: true, id: node.id });
       } catch (error) {
         return json(error.status || 400, { error: error.message || 'That file could not be saved.' });
@@ -1054,32 +1147,41 @@ export class HubCore {
     });
 
     r('DELETE', '/api/db/nodes/:id', async ({ request, params }) => {
-      const [session, denied] = this.need(request);
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
       // Blobs and share links are keyed by the node id, so deleting the file
       // also ends its stored data and any link that still pointed at it.
-      this.deleteNode(session.userId, params.id);
+      await this.deleteNode(session.userId, params.id);
       await this.deleteBlob(session.userId, params.id);
-      this.revokeShare(session.userId, params.id);
+      await this.revokeShare(session.userId, params.id);
       return json(200, { ok: true });
     });
 
     r('GET', '/api/db/blobs/:id', async ({ request, params }) => {
-      const [session, denied] = this.need(request);
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
-      const info = this.blobInfo(session.userId, params.id);
+      const info = await this.blobInfo(session.userId, params.id);
       if (!info) return json(404, { error: 'That file has no stored data.' });
-      const node = this.getNode(session.userId, params.id);
+      const node = await this.getNode(session.userId, params.id);
       return this.streamBlob(request, info, node ? node.name : params.id, false);
     });
 
-    r('PUT', '/api/db/blobs/:id', async ({ request, params }) => {
-      const [session, denied] = this.need(request);
+    r('PUT', '/api/db/blobs/:id', async ({ request, params, url }) => {
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
       if (Number(request.headers.get('content-length') || 0) > this.maxUpload) {
         return json(413, { error: 'That file is too large for this server.' });
       }
       const mime = String(request.headers.get('x-deluxe-mime') || request.headers.get('content-type') || 'application/octet-stream');
+      if (url.searchParams.has('offset')) {
+        try {
+          const offset = Number(url.searchParams.get('offset'));
+          const part = await this.saveBlobPart(session.userId, params.id, request, mime, offset, url.searchParams.get('last') === '1');
+          return json(part.done ? 201 : 202, { ok: true, id: params.id, size: part.received, done: part.done, mime });
+        } catch (error) {
+          return json(error.status || 400, { error: error.status ? error.message : 'That file could not be stored.' });
+        }
+      }
       try {
         const size = await this.saveBlob(session.userId, params.id, request, mime);
         return json(201, { ok: true, id: params.id, size, mime });
@@ -1089,65 +1191,65 @@ export class HubCore {
     });
 
     r('DELETE', '/api/db/blobs/:id', async ({ request, params }) => {
-      const [session, denied] = this.need(request);
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
       await this.deleteBlob(session.userId, params.id);
       return json(200, { ok: true });
     });
 
-    r('GET', '/api/db/settings/:key', ({ request, params }) => {
-      const [session, denied] = this.need(request);
+    r('GET', '/api/db/settings/:key', async ({ request, params }) => {
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
       if (!SETTINGS_KEY.test(params.key)) return json(400, { error: 'That setting name is not valid.' });
-      const value = this.getSetting(session.userId, params.key);
+      const value = await this.getSetting(session.userId, params.key);
       return value === undefined ? json(404, { error: 'That setting is not set.' }) : json(200, { key: params.key, value });
     });
 
     r('PUT', '/api/db/settings/:key', async ({ request, params }) => {
-      const [session, denied] = this.need(request);
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
       if (!SETTINGS_KEY.test(params.key)) return json(400, { error: 'That setting key is not valid.' });
       const body = await readJsonBody(request);
-      this.putSetting(session.userId, params.key, body.value);
+      await this.putSetting(session.userId, params.key, body.value);
       return json(200, { ok: true, key: params.key });
     });
 
-    r('DELETE', '/api/db/settings/:key', ({ request, params }) => {
-      const [session, denied] = this.need(request);
+    r('DELETE', '/api/db/settings/:key', async ({ request, params }) => {
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
-      this.deleteSetting(session.userId, params.key);
+      await this.deleteSetting(session.userId, params.key);
       return json(200, { ok: true });
     });
 
     r('POST', '/api/db/clear', async ({ request }) => {
-      const [session, denied] = this.need(request);
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
       await this.clearAccountData(session.userId);
       return json(200, { ok: true });
     });
 
-    r('POST', '/api/files/:id/share', ({ request, params, url }) => {
-      const [session, denied] = this.need(request);
+    r('POST', '/api/files/:id/share', async ({ request, params, url }) => {
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
-      const node = this.getNode(session.userId, params.id);
+      const node = await this.getNode(session.userId, params.id);
       if (!node) return json(404, { error: 'That file is not here.' });
       if (node.type !== 'file') return json(400, { error: 'Folders cannot be shared on their own.' });
-      const token = this.ensureShare(session.userId, node.id, node.name);
+      const token = await this.ensureShare(session.userId, node.id, node.name);
       return json(200, { token, path: `/s/${token}`, url: `${origin(url)}/s/${token}`, name: node.name });
     });
 
-    r('DELETE', '/api/files/:id/share', ({ request, params }) => {
-      const [session, denied] = this.need(request);
+    r('DELETE', '/api/files/:id/share', async ({ request, params }) => {
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
-      this.revokeShare(session.userId, params.id);
+      await this.revokeShare(session.userId, params.id);
       return json(200, { ok: true });
     });
 
-    r('GET', '/api/files/shares', ({ request, url }) => {
-      const [session, denied] = this.need(request);
+    r('GET', '/api/files/shares', async ({ request, url }) => {
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
       return json(200, {
-        shares: this.listShares(session.userId).map((share) => ({
+        shares: (await this.listShares(session.userId)).map((share) => ({
           token: share.token,
           name: share.name,
           fileId: share.blob_id,
@@ -1158,10 +1260,10 @@ export class HubCore {
       });
     });
 
-    r('GET', '/api/shared/:token', ({ request, params }) => this.serveShared(request, params.token));
+    r('GET', '/api/shared/:token', async ({ request, params }) => this.serveShared(request, params.token));
 
     r('POST', '/api/link', async ({ request }) => {
-      const [session, denied] = this.need(request);
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
       if (session.clientId) return json(403, { error: 'Make a link id from Deluxe Drive itself.' });
       const body = await readJsonBody(request);
@@ -1198,7 +1300,7 @@ export class HubCore {
         });
       }
       const { account } = found;
-      const session = this.createSession(account.id, {
+      const session = await this.createSession(account.id, {
         clientId: app,
         scope: LINK_APPS[app].scope,
         ttlSeconds: app === 'deluxe-docs' ? DOCS_SESSION_SECONDS : APP_SESSION_SECONDS,
@@ -1217,18 +1319,47 @@ export class HubCore {
     // lands in a "Deluxe Convert" folder at the top of the drive. ?share=1
     // also makes a share link for it.
     r('POST', '/api/import', async ({ request, url }) => {
-      const [session, denied] = this.need(request);
+      const [session, denied] = await this.need(request);
       if (denied) return denied;
       const declared = Number(request.headers.get('content-length') || 0);
       if (declared > this.maxUpload) return json(413, { error: 'That file is too large for Deluxe Drive.' });
-      if (!this.accountById(session.userId)) return json(401, { error: 'Sign in to Deluxe Drive again.', code: 'unauthorized' });
+      if (!await this.accountById(session.userId)) return json(401, { error: 'Sign in to Deluxe Drive again.', code: 'unauthorized' });
       const name = HubCore.cleanFileName(decodeSegment(String(request.headers.get('x-deluxe-name') || '')));
       const mime = HubCore.cleanMime(request.headers.get('x-deluxe-mime') || request.headers.get('content-type'));
+      if (url.searchParams.has('offset')) {
+        // A big file arrives in pieces. The first piece (offset 0) gets an
+        // upload id back; the others name it. The id is new and unused, so a
+        // piece can never land on a file that is already in the drive.
+        const offset = Number(url.searchParams.get('offset'));
+        const last = url.searchParams.get('last') === '1';
+        let id = String(url.searchParams.get('upload') || '');
+        if (offset === 0) id = HubCore.newNodeId();
+        else if (!ID_PATTERN.test(id) || !id.startsWith('n_') || (await this.getNode(session.userId, id)) || (await this.blobInfo(session.userId, id))) {
+          return json(400, { error: 'That upload is not valid. Share the file again.' });
+        }
+        try {
+          const part = await this.saveBlobPart(session.userId, id, request, mime, offset, last);
+          if (!part.done) return json(202, { ok: true, upload: id, received: part.received });
+          if (!part.received) {
+            await this.deleteBlob(session.userId, id);
+            return json(400, { error: 'That file is empty.' });
+          }
+          const node = await this.finishImport(session.userId, id, name, mime, part.received);
+          const result = { ok: true, file: { id: node.id, name: node.name, size: node.size, mime: node.mime }, folder: IMPORT_FOLDER };
+          if (url.searchParams.get('share') === '1') {
+            const token = await this.ensureShare(session.userId, node.id, node.name);
+            result.share = { token, url: `${origin(url)}/s/${token}` };
+          }
+          return json(201, result);
+        } catch (error) {
+          return json(error.status || 400, { error: error.status ? error.message : 'That file could not be added.' });
+        }
+      }
       try {
         const node = await this.importFile(session.userId, name, mime, request);
         const result = { ok: true, file: { id: node.id, name: node.name, size: node.size, mime: node.mime }, folder: IMPORT_FOLDER };
         if (url.searchParams.get('share') === '1') {
-          const token = this.ensureShare(session.userId, node.id, node.name);
+          const token = await this.ensureShare(session.userId, node.id, node.name);
           result.share = { token, url: `${origin(url)}/s/${token}` };
         }
         return json(201, result);
@@ -1238,9 +1369,9 @@ export class HubCore {
     });
 
     // Disconnecting Deluxe Docs ends its key.
-    r('DELETE', '/api/link/session', ({ request }) => {
+    r('DELETE', '/api/link/session', async ({ request }) => {
       const token = bearerToken(request);
-      if (token) this.dropSession(token);
+      if (token) await this.dropSession(token);
       return json(200, { ok: true });
     });
   }
@@ -1251,15 +1382,16 @@ export class HubCore {
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       return json(405, { error: 'Only reading is allowed here.' });
     }
-    const share = this.shareByToken(token);
+    const share = await this.shareByToken(token);
     if (!share) return text(404, 'Not found');
-    const info = this.blobInfo(share.account_id, share.blob_id);
+    const info = await this.blobInfo(share.account_id, share.blob_id);
     if (!info) return text(404, 'Not found');
     return this.streamBlob(request, info, share.name || share.blob_id, false);
   }
 
   async handle(request) {
     try {
+      await this.ready();
       const url = new URL(request.url);
       const segments = url.pathname.split('/').filter(Boolean).map(decodeSegment);
 

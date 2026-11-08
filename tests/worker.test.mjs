@@ -1,5 +1,7 @@
-// Runs the Worker's server code in Node: node:sqlite stands in for the Durable
-// Object's SQL, and a Map stands in for R2. Run: node tests/worker.test.mjs
+// Runs the server code (worker/hub.js) in Node: node:sqlite stands in for the
+// Durable Object's SQL, and a Map stands in for R2. Run: node tests/worker.test.mjs
+// STORE=r2 keeps files in a fake R2 bucket. PG_URL=postgres://... runs it on
+// Postgres through the Vercel adapter (api/_pg.mjs), as on Vercel.
 import assert from 'node:assert/strict';
 import { pbkdf2Sync, randomBytes } from 'node:crypto';
 import { HubCore } from '../worker/hub.js';
@@ -8,13 +10,21 @@ import { NodeSql, FakeR2 } from './fakes.mjs';
 const origin = 'https://drive.test';
 // STORE=r2 runs against a fake R2 bucket; the default keeps files in SQLite.
 const useR2 = process.env.STORE === 'r2';
+const pgUrl = process.env.PG_URL || '';
 const files = new FakeR2();
-const sqlAdapter = new NodeSql();
-const hub = new HubCore(sqlAdapter, useR2 ? { FILES: files } : {});
-const hasBlob = (key) => (useR2
+let sqlAdapter;
+if (pgUrl) {
+  const { PgSql } = await import('../api/_pg.mjs');
+  sqlAdapter = new PgSql(pgUrl);
+  for (const t of ['meta', 'accounts', 'nodes', 'settings', 'blobs', 'shares', 'sessions', 'link_codes', 'chunks']) await sqlAdapter.exec(`DROP TABLE IF EXISTS ${t}`);
+} else sqlAdapter = new NodeSql();
+// Small pieces here so the piece-by-piece upload is tested with small files.
+const hub = new HubCore(sqlAdapter, useR2 ? { FILES: files } : { MAX_REQUEST_BYTES: 4 * 1024 * 1024 });
+const q = async (query, ...params) => (await sqlAdapter.exec(query, ...params)).toArray();
+const hasBlob = async (key) => (useR2
   ? files.m.has(key)
-  : sqlAdapter.db.prepare('SELECT COUNT(*) AS c FROM chunks WHERE key = ?').get(key).c > 0);
-console.log('file storage:', useR2 ? 'r2 (fake)' : 'sqlite');
+  : Number((await q('SELECT COUNT(*) AS c FROM chunks WHERE key = ?', key))[0].c) > 0);
+console.log('file storage:', useR2 ? 'r2 (fake)' : pgUrl ? 'postgres' : 'sqlite');
 
 async function call(method, path, { token, body, headers = {}, raw } = {}) {
   const h = { ...headers };
@@ -109,7 +119,7 @@ assert.deepEqual(new Uint8Array(await r.arrayBuffer()), big.slice(big.length - 5
 await call('PUT', '/api/db/blobs/big', { token: T, raw: new Uint8Array(10).fill(9), headers: { 'Content-Length': '10' } });
 r = await call('GET', '/api/db/blobs/big', { token: T });
 assert.deepEqual(new Uint8Array(await r.arrayBuffer()), new Uint8Array(10).fill(9));
-if (!useR2) assert.equal(sqlAdapter.db.prepare('SELECT COUNT(*) AS c FROM chunks WHERE key LIKE ?').get('%/big').c, 1);
+if (!useR2) assert.equal(Number((await q('SELECT COUNT(*) AS c FROM chunks WHERE key LIKE ?', '%/big'))[0].c), 1);
 await call('DELETE', '/api/db/blobs/big', { token: T });
 ok('multi-piece file, boundary range, overwrite');
 
@@ -149,7 +159,7 @@ ok('link ids: new each time, one use, newest wins, forgiving paste');
 
 // an id runs out after 60 seconds
 const l3 = await j(await call('POST', '/api/link', { token: T }));
-sqlAdapter.db.prepare('UPDATE link_codes SET expires_at = ?').run(Date.now() - 1);
+await q('UPDATE link_codes SET expires_at = ?', Date.now() - 1);
 assert.equal((await call('POST', '/api/link/redeem', { body: { linkId: l3.linkId } })).status, 404);
 ok('link ids expire');
 
@@ -248,16 +258,57 @@ for (let i = 0; i < 8; i++) await call('POST', '/api/link/redeem', { body: { lin
 assert.equal((await call('POST', '/api/link/redeem', { body: { linkId: 'AAAA-BBBB-CCCC' }, headers: { 'cf-connecting-ip': '9.9.9.9' } })).status, 429);
 assert.equal((await call('POST', '/api/link/redeem', { body: { linkId: 'AAAA-BBBB-CCCC' }, headers: { 'cf-connecting-ip': '8.8.8.8' } })).status, 404); ok('guessing link ids is throttled per address');
 
+// big files in pieces (a Vercel Function takes about 4.5 MB per request)
+const health2 = await j(await call('GET', '/api/health'));
+if (!useR2) {
+  assert.equal(health2.limits.partBytes, 4 * 1024 * 1024);
+  const MB = 1024 * 1024, total = 9 * MB + 123;
+  const whole = new Uint8Array(total).map((_, i) => (i * 7) % 256);
+  const piece = (from, to) => whole.slice(from, to);
+  const put = (offset, bytes, last) => call('PUT', `/api/db/blobs/p_1?offset=${offset}${last ? '&last=1' : ''}`, { token: T, raw: bytes, headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(bytes.length) } });
+  assert.equal((await put(0, piece(0, 4 * MB))).status, 202);
+  assert.equal((await call('GET', '/api/db/blobs/p_1', { token: T })).status, 404); // not readable until the last piece
+  assert.equal((await put(8 * MB, piece(8 * MB, total), true)).status, 409); // a gap is refused
+  assert.equal((await put(4 * MB, piece(4 * MB, 8 * MB))).status, 202);
+  assert.equal((await put(8 * MB, piece(8 * MB, total), true)).status, 201);
+  r = await call('GET', '/api/db/blobs/p_1', { token: T });
+  const back = new Uint8Array(await r.arrayBuffer());
+  assert.equal(back.length, total); assert.ok(back.every((b, i) => b === whole[i]));
+  r = await call('GET', '/api/db/blobs/p_1', { token: T, headers: { Range: `bytes=${4 * MB - 2}-${4 * MB + 1}` } });
+  assert.equal(r.status, 206); assert.deepEqual([...new Uint8Array(await r.arrayBuffer())], [...whole.slice(4 * MB - 2, 4 * MB + 2)]);
+  assert.equal((await put(1000, piece(0, 10))).status, 400); // pieces start on a 1 MB line
+  await call('DELETE', '/api/db/blobs/p_1', { token: T });
+  ok('big files upload in pieces and read back whole');
+
+  // Deluxe Convert sends a big file in pieces too
+  const cl = await j(await call('POST', '/api/link', { token: T, body: { app: 'deluxe-convert' } }));
+  const CK = (await j(await call('POST', '/api/link/redeem', { body: { linkId: cl.linkId, app: 'deluxe-convert' } }))).token;
+  const imp = (qs, bytes) => call('POST', '/api/import?' + qs, { token: CK, raw: bytes, headers: { 'Content-Type': 'video/mp4', 'X-Deluxe-Name': encodeURIComponent('clip.mp4'), 'Content-Length': String(bytes.length) } });
+  r = await imp('offset=0', piece(0, 4 * MB)); assert.equal(r.status, 202);
+  const up = (await j(r)).upload; assert.match(up, /^n_/);
+  assert.equal((await imp(`offset=${4 * MB}&upload=f_1`, piece(4 * MB, 8 * MB))).status, 400); // cannot write into an existing file
+  assert.equal((await imp(`offset=${4 * MB}&upload=${up}`, piece(4 * MB, 8 * MB))).status, 202);
+  r = await imp(`offset=${8 * MB}&upload=${up}&last=1&share=1`, piece(8 * MB, total));
+  assert.equal(r.status, 201); const big = await j(r);
+  assert.equal(big.file.size, total); assert.equal(big.file.id, up); assert.ok(big.share.url);
+  assert.equal((await imp(`offset=${4 * MB}&upload=${up}`, piece(4 * MB, 8 * MB))).status, 400); // finished uploads are closed
+  const got = new Uint8Array(await (await call('GET', new URL(big.share.url).pathname)).arrayBuffer());
+  assert.equal(got.length, total); assert.equal(got[total - 1], whole[total - 1]);
+  for (const x of (await j(await call('GET', '/api/db/nodes', { token: T }))).nodes.filter((x) => x.id === up || x.name === 'Deluxe Convert')) await call('DELETE', `/api/db/nodes/${x.id}`, { token: T });
+  await call('DELETE', '/api/link/session', { token: CK });
+  ok('deluxe convert sends big files in pieces');
+}
+
 // delete file removes blob and share
 assert.equal((await call('DELETE', '/api/db/nodes/f_1', { token: T })).status, 200);
 assert.equal((await call('GET', `/s/${share.token}`)).status, 404);
-assert.equal(hasBlob(`b/${acct.user.id}/f_1`), false); ok('deleting a file removes its data and share link');
+assert.equal(await hasBlob(`b/${acct.user.id}/f_1`), false); ok('deleting a file removes its data and share link');
 
 // clear + delete account
 await call('PUT', '/api/db/blobs/g_1', { token: T, raw: new Uint8Array(5), headers: { 'Content-Length': '5' } });
-assert.ok(hasBlob(`b/${acct.user.id}/g_1`));
+assert.ok(await hasBlob(`b/${acct.user.id}/g_1`));
 assert.equal((await call('DELETE', `/api/accounts/${acct.user.id}`, { token: T })).status, 200);
-assert.equal(hasBlob(`b/${acct.user.id}/g_1`), false);
+assert.equal(await hasBlob(`b/${acct.user.id}/g_1`), false);
 assert.equal((await call('GET', '/api/auth/me', { token: T })).status, 401); ok('deleting an account removes everything');
 
 // unknown routes
@@ -265,4 +316,5 @@ assert.equal((await call('GET', '/api/nope')).status, 404);
 assert.equal((await call('GET', '/oauth/authorize')).status, 404);
 assert.equal((await call('GET', '/connect/abc')).status, 404); ok('unknown routes');
 
+if (pgUrl) await sqlAdapter.end();
 console.log(`\nall ${n} groups passed`);

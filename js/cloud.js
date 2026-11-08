@@ -15,15 +15,17 @@ const DOCS_KEY = 'dd.docs';
 // Where Deluxe Docs lives. A link id made here is pasted there.
 export const DOCS_URL = 'https://deluxe-docs-iota.vercel.app';
 // Where Deluxe Convert lives. Its link id lets it add converted files here.
-export const CONVERT_URL = 'https://deluxe-convert-cloud.deluxelordd.workers.dev';
-// The drive's server runs on Cloudflare. Copies of the page hosted on Vercel
-// use it, so accounts and files are the same wherever the drive is opened.
-const DEFAULT_SERVER = 'https://deluxe-drive.deluxelordd.workers.dev';
+export const CONVERT_URL = 'https://deluxe-convert.vercel.app';
+// The drive's server runs on Vercel next to the page (api/hub.mjs). Copies of
+// the page served elsewhere (GitHub Pages, a preview) use it, so accounts and
+// files are the same wherever the drive is opened.
+const DEFAULT_SERVER = 'https://deluxe-drive-xi.vercel.app';
 const DOCS_DEFAULTS = { url: '', autoOpen: true };
 const SERVER_KEY = 'dd.server';
 
 const state = {
   server: null,
+  problem: '',
   base: '',
   token: null,
   user: null,
@@ -94,7 +96,12 @@ async function probeAt(base) {
       cache: 'no-store',
       credentials: 'same-origin',
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      // The server is there but cannot keep files yet (no database on Vercel).
+      const failed = await response.json().catch(() => null);
+      if (failed && failed.code === 'no-database' && !state.problem) state.problem = String(failed.error || '');
+      return null;
+    }
 
     const data = await response.json();
     if (!data || data.ok !== true || data.server !== true) return null;
@@ -110,7 +117,9 @@ async function probe() {
   const bases = [''];
   const saved = savedServer();
   if (saved && saved !== location.origin) bases.push(saved);
-  if (/\.vercel\.app$/i.test(location.hostname) && !bases.includes(DEFAULT_SERVER)) bases.push(DEFAULT_SERVER);
+  if (location.origin !== DEFAULT_SERVER && !bases.includes(DEFAULT_SERVER) && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) {
+    bases.push(DEFAULT_SERVER);
+  }
 
   for (const base of bases) {
     const found = await probeAt(base);
@@ -121,6 +130,11 @@ async function probe() {
   }
 
   return null;
+}
+
+// Why the server could not be used, when it said (for example: no database).
+export function serverProblem() {
+  return state.server ? '' : state.problem;
 }
 
 export async function detect() {
@@ -322,6 +336,27 @@ export const remote = {
   },
 
   async putBlob(id, blob) {
+    // A Vercel Function takes about 4.5 MB per request, so a bigger file goes
+    // in pieces; the server says how big each piece may be.
+    const limits = (state.server && state.server.limits) || {};
+    const part = Number(limits.partBytes) || 0;
+    const most = Number(limits.requestBytes) || 0;
+    if (blob && part > 0 && most > 0 && blob.size > most) {
+      const type = blob.type || 'application/octet-stream';
+      for (let offset = 0; offset < blob.size; offset += part) {
+        const last = offset + part >= blob.size;
+        const response = await request(
+          `/api/db/blobs/${encodeURIComponent(id)}?offset=${offset}${last ? '&last=1' : ''}`,
+          { method: 'PUT', headers: { 'Content-Type': type }, body: blob.slice(offset, offset + part, type) }
+        );
+        if (!response.ok) {
+          const data = await bodyOf(response);
+          throw new Error((data && data.error) || 'That file could not be stored on the server.');
+        }
+      }
+      return true;
+    }
+
     const response = await request(`/api/db/blobs/${encodeURIComponent(id)}`, {
       method: 'PUT',
       headers: { 'Content-Type': (blob && blob.type) || 'application/octet-stream' },
@@ -438,7 +473,7 @@ export function docsReady() {
 // Deluxe Convert for a key that can only add converted files.
 export async function generateLinkId(app = 'deluxe-docs') {
   if (!isOnline()) {
-    throw new Error('Link IDs need the Deluxe Drive server. Open the drive at its workers.dev address.');
+    throw new Error('Link IDs need the Deluxe Drive server. Open the drive at deluxe-drive-xi.vercel.app.');
   }
   const data = await requestJson('/api/link', {
     method: 'POST',

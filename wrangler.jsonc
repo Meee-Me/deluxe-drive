@@ -16,8 +16,10 @@
   "durable_objects": { "bindings": [{ "name": "HUB", "class_name": "Hub" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub"] }],
 
-  // File contents. Create this bucket once: Storage & databases > R2.
-  "r2_buckets": [{ "binding": "FILES", "bucket_name": "deluxe-drive-files" }],
+  // File contents are kept in the Durable Object's database by default, which
+  // needs nothing set up and works on a free account. For a large drive, enable
+  // R2, create a bucket, and add it here: the drive then stores files in R2.
+  // "r2_buckets": [{ "binding": "FILES", "bucket_name": "deluxe-drive-files" }],
 
   "vars": {
     // Pages allowed to connect with a Link ID (comma separated).

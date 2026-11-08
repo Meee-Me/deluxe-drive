@@ -5,11 +5,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HubCore } from '../worker/hub.js';
-import { NodeSql, FakeR2 } from './fakes.mjs';
+import { NodeSql } from './fakes.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const port = Number(process.argv[2] || 8787);
-const hub = new HubCore(new NodeSql(), { FILES: new FakeR2(), ALLOWED_DOCS_ORIGINS: process.env.ALLOWED_DOCS_ORIGINS || '' });
+const hub = new HubCore(new NodeSql(), { ALLOWED_DOCS_ORIGINS: process.env.ALLOWED_DOCS_ORIGINS || '' });
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
 
 http.createServer(async (req, res) => {

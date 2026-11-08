@@ -3,6 +3,8 @@ import { DatabaseSync } from 'node:sqlite';
 export class NodeSql {
   constructor() { this.db = new DatabaseSync(':memory:'); }
   exec(query, ...params) {
+    // The Durable Object takes ArrayBuffer for BLOBs; node:sqlite wants bytes.
+    params = params.map((p) => (p instanceof ArrayBuffer ? new Uint8Array(p) : p));
     const stmt = this.db.prepare(query);
     if (/^\s*(select|with)/i.test(query)) {
       const rows = stmt.all(...params);

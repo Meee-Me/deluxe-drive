@@ -79,14 +79,14 @@ server/store.js     accounts, files, share links and sessions on disk
 server/oauth.js     Authorization Code + PKCE for Deluxe Docs
 ```
 
-## On Cloudflare (Workers + R2)
+## On Cloudflare (Workers)
 
 The Node server above is mirrored by a Cloudflare Worker, so the drive can run on
 `*.workers.dev` with the same accounts, files, share links and Link ID.
 
 ```
 worker/index.js    entry point: serves the page, sends /api /oauth /connect /s to the Hub
-worker/hub.js      the server: accounts, files, share links, Link ID, OAuth (Durable Object + R2)
+worker/hub.js      the server: accounts, files, share links, Link ID, OAuth (Durable Object, SQLite or R2)
 worker/pages.js    the sign-in and consent pages Deluxe Docs is sent to
 wrangler.jsonc     bindings and settings
 .assetsignore      files that are not part of the public site
@@ -95,18 +95,22 @@ tests/             node tests/worker.test.mjs   (runs the server code against fa
 
 Set it up once:
 
-1. **R2 bucket.** Cloudflare dashboard, Storage & databases, R2, Create bucket, named
-   `deluxe-drive-files`. (R2 asks for a payment method on file; the free allowance covers a small drive.)
-2. **Deploy.** Workers & Pages, your `deluxe-drive` Worker, Settings, Builds, connect this repository,
-   deploy command `npx wrangler deploy`. Or run `npx wrangler deploy` yourself.
-3. **Allow Deluxe Docs.** `ALLOWED_DOCS_ORIGINS` in `wrangler.jsonc` lists the Deluxe Docs addresses that
+1. **Deploy.** Workers & Pages, your `deluxe-drive` Worker, Settings, Builds, connect this repository,
+   deploy command `npx wrangler deploy`. Or run `npx wrangler deploy` yourself. Nothing else has to be
+   created: accounts and files are kept in the Worker's own database, which works on a free account.
+2. **Allow Deluxe Docs.** `ALLOWED_DOCS_ORIGINS` in `wrangler.jsonc` lists the Deluxe Docs addresses that
    may connect with a Link ID (comma separated). It already contains
    `https://deluxe-docs.deluxelordd.workers.dev`.
+3. **Optional, for a big drive: R2.** Files are cut into 1 MB pieces in the database, which suits personal
+   use. To keep files in R2 instead, enable R2 in the dashboard, create a bucket, and uncomment the
+   `r2_buckets` entry in `wrangler.jsonc` (binding `FILES`). Nothing else changes.
 
-Accounts live in the Durable Object's SQLite database and files in R2, so they survive deploys.
-A single file can be up to 100 MB (the Workers request limit). The password check for Deluxe Docs
-happens in the sign-in page itself (the browser hashes the password, as the drive does) because Workers
-cap PBKDF2 at 100,000 rounds. A token given to Deluxe Docs can only read file lists and file contents.
+Accounts and files survive deploys. A single file can be up to 100 MB (the Workers request limit). The
+password check for Deluxe Docs happens in the sign-in page itself (the browser hashes the password, as the
+drive does) because Workers cap PBKDF2 at 100,000 rounds. A token given to Deluxe Docs can only read file
+lists and file contents.
+
+Tests: `node tests/worker.test.mjs` (SQLite) and `STORE=r2 node tests/worker.test.mjs` (fake R2).
 
 ## Deluxe Docs
 

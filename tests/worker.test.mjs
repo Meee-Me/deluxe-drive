@@ -7,8 +7,15 @@ import { NodeSql, FakeR2 } from './fakes.mjs';
 
 const origin = 'https://drive.test';
 const DOCS = 'https://deluxe-docs.deluxelordd.workers.dev';
+// STORE=r2 runs against a fake R2 bucket; the default keeps files in SQLite.
+const useR2 = process.env.STORE === 'r2';
 const files = new FakeR2();
-const hub = new HubCore(new NodeSql(), { FILES: files, ALLOWED_DOCS_ORIGINS: DOCS });
+const sqlAdapter = new NodeSql();
+const hub = new HubCore(sqlAdapter, { ...(useR2 ? { FILES: files } : {}), ALLOWED_DOCS_ORIGINS: DOCS });
+const hasBlob = (key) => (useR2
+  ? files.m.has(key)
+  : sqlAdapter.db.prepare('SELECT COUNT(*) AS c FROM chunks WHERE key = ?').get(key).c > 0);
+console.log('file storage:', useR2 ? 'r2 (fake)' : 'sqlite');
 
 async function call(method, path, { token, body, headers = {}, raw } = {}) {
   const h = { ...headers };
@@ -29,7 +36,7 @@ const ok = (name) => console.log(`ok ${++n} ${name}`);
 
 // health
 let r = await call('GET', '/api/health');
-assert.equal(r.status, 200); assert.equal((await j(r)).server, true); ok('health');
+assert.equal(r.status, 200); const health = await j(r); assert.equal(health.server, true); assert.equal(health.files, useR2 ? 'r2' : 'sqlite'); ok('health');
 
 // account
 const salt = randomBytes(16).toString('hex');
@@ -89,6 +96,25 @@ r = await call('GET', '/api/db/blobs/f_1', { token: T, headers: { Range: 'bytes=
 assert.equal(r.status, 416);
 r = await call('PUT', '/api/db/blobs/empty', { token: T, raw: new Uint8Array(0), headers: { 'Content-Length': '0' } });
 assert.equal(r.status, 201); assert.equal((await j(r)).size, 0); ok('blob upload, download, ranges, empty file');
+
+// a file bigger than one 1 MB piece, read whole and across a piece boundary
+const big = new Uint8Array(2.5 * 1024 * 1024).map((_, i) => (i * 7 + (i >> 10)) % 256);
+r = await call('PUT', '/api/db/blobs/big', { token: T, raw: big, headers: { 'Content-Length': String(big.length) } });
+assert.equal(r.status, 201); assert.equal((await j(r)).size, big.length);
+r = await call('GET', '/api/db/blobs/big', { token: T });
+assert.deepEqual(new Uint8Array(await r.arrayBuffer()), big);
+const lo = 1024 * 1024 - 10;
+r = await call('GET', '/api/db/blobs/big', { token: T, headers: { Range: `bytes=${lo}-${lo + 30}` } });
+assert.equal(r.status, 206); assert.deepEqual(new Uint8Array(await r.arrayBuffer()), big.slice(lo, lo + 31));
+r = await call('GET', '/api/db/blobs/big', { token: T, headers: { Range: `bytes=${big.length - 5}-` } });
+assert.deepEqual(new Uint8Array(await r.arrayBuffer()), big.slice(big.length - 5));
+// overwriting with something smaller leaves no stale pieces behind
+await call('PUT', '/api/db/blobs/big', { token: T, raw: new Uint8Array(10).fill(9), headers: { 'Content-Length': '10' } });
+r = await call('GET', '/api/db/blobs/big', { token: T });
+assert.deepEqual(new Uint8Array(await r.arrayBuffer()), new Uint8Array(10).fill(9));
+if (!useR2) assert.equal(sqlAdapter.db.prepare('SELECT COUNT(*) AS c FROM chunks WHERE key LIKE ?').get('%/big').c, 1);
+await call('DELETE', '/api/db/blobs/big', { token: T });
+ok('multi-piece file, boundary range, overwrite');
 
 // share
 r = await call('POST', '/api/files/f_1/share', { token: T });
@@ -191,13 +217,13 @@ assert.equal((await call('POST', '/api/auth/session', { body: { userId: other.us
 // delete file removes blob and share
 assert.equal((await call('DELETE', '/api/db/nodes/f_1', { token: T })).status, 200);
 assert.equal((await call('GET', `/s/${share.token}`)).status, 404);
-assert.equal(files.m.has(`b/${acct.user.id}/f_1`), false); ok('deleting a file removes its data and share link');
+assert.equal(hasBlob(`b/${acct.user.id}/f_1`), false); ok('deleting a file removes its data and share link');
 
 // clear + delete account
 await call('PUT', '/api/db/blobs/g_1', { token: T, raw: new Uint8Array(5), headers: { 'Content-Length': '5' } });
-assert.ok(files.m.has(`b/${acct.user.id}/g_1`));
+assert.ok(hasBlob(`b/${acct.user.id}/g_1`));
 assert.equal((await call('DELETE', `/api/accounts/${acct.user.id}`, { token: T })).status, 200);
-assert.equal(files.m.has(`b/${acct.user.id}/g_1`), false);
+assert.equal(hasBlob(`b/${acct.user.id}/g_1`), false);
 assert.equal((await call('GET', '/api/auth/me', { token: T })).status, 401); ok('deleting an account removes everything');
 
 // unknown routes

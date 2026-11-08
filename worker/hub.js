@@ -44,6 +44,7 @@ const SCHEMA = [
      id TEXT PRIMARY KEY, name TEXT, redirect_uri TEXT NOT NULL UNIQUE, created_at INTEGER)`,
   `CREATE TABLE IF NOT EXISTS sessions (
      token TEXT PRIMARY KEY, user_id TEXT NOT NULL, client_id TEXT, scope TEXT, created_at INTEGER, expires_at INTEGER)`,
+  `CREATE TABLE IF NOT EXISTS chunks (key TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (key, idx))`,
   `CREATE TABLE IF NOT EXISTS codes (code TEXT PRIMARY KEY, json TEXT NOT NULL, expires_at INTEGER)`,
   `CREATE TABLE IF NOT EXISTS pending (id TEXT PRIMARY KEY, json TEXT NOT NULL, expires_at INTEGER)`,
 ];
@@ -184,6 +185,138 @@ async function readFormBody(request) {
 }
 
 /* ------------------------------------------------------------------ */
+/* File storage: the database by default, R2 when it is bound          */
+/* ------------------------------------------------------------------ */
+
+const CHUNK = 1024 * 1024;
+
+function toBytes(value) {
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+}
+
+// Files are cut into 1 MB rows of the Durable Object's SQLite database, so the
+// drive works on a free Cloudflare account with nothing to set up.
+class SqlStore {
+  constructor(sql) {
+    this.sql = sql;
+    this.name = 'sqlite';
+  }
+
+  async put(key, body) {
+    this.sql.exec(`DELETE FROM chunks WHERE key = ?`, key);
+    const buffer = new Uint8Array(CHUNK);
+    let filled = 0;
+    let index = 0;
+    let size = 0;
+
+    const flush = () => {
+      if (!filled) return;
+      this.sql.exec(`INSERT INTO chunks (key, idx, data) VALUES (?, ?, ?)`, key, index, buffer.slice(0, filled).buffer);
+      index += 1;
+      filled = 0;
+    };
+    const feed = (bytes) => {
+      let offset = 0;
+      while (offset < bytes.length) {
+        const take = Math.min(CHUNK - filled, bytes.length - offset);
+        buffer.set(bytes.subarray(offset, offset + take), filled);
+        filled += take;
+        offset += take;
+        size += take;
+        if (filled === CHUNK) flush();
+      }
+    };
+
+    try {
+      if (body && typeof body.getReader === 'function') {
+        const reader = body.getReader();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          feed(toBytes(value));
+        }
+      } else if (body) {
+        feed(toBytes(body));
+      }
+      flush();
+    } catch (error) {
+      this.sql.exec(`DELETE FROM chunks WHERE key = ?`, key);
+      throw error;
+    }
+    return { size };
+  }
+
+  async get(key, options) {
+    const total = this.sql.exec(`SELECT COALESCE(SUM(LENGTH(data)), 0) AS n FROM chunks WHERE key = ?`, key).toArray()[0].n;
+    if (!total) return null;
+
+    const start = options && options.range ? options.range.offset : 0;
+    const end = Math.min(total, options && options.range ? options.range.offset + options.range.length : total);
+    let position = start;
+    const sql = this.sql;
+
+    const body = new ReadableStream({
+      pull(controller) {
+        if (position >= end) {
+          controller.close();
+          return;
+        }
+        const index = Math.floor(position / CHUNK);
+        const row = sql.exec(`SELECT data FROM chunks WHERE key = ? AND idx = ?`, key, index).toArray()[0];
+        if (!row) {
+          controller.error(new Error('A stored file is missing a piece.'));
+          return;
+        }
+        const bytes = toBytes(row.data);
+        const from = position - index * CHUNK;
+        const to = Math.min(bytes.length, from + (end - position));
+        controller.enqueue(bytes.slice(from, to));
+        position += to - from;
+      },
+    });
+    return { body, size: end - start };
+  }
+
+  async delete(keys) {
+    for (const key of [].concat(keys)) this.sql.exec(`DELETE FROM chunks WHERE key = ?`, key);
+  }
+
+  async deletePrefix(prefix) {
+    this.sql.exec(`DELETE FROM chunks WHERE substr(key, 1, ?) = ?`, prefix.length, prefix);
+  }
+}
+
+class R2Store {
+  constructor(bucket) {
+    this.bucket = bucket;
+    this.name = 'r2';
+  }
+
+  put(key, body, options) {
+    return this.bucket.put(key, body, options);
+  }
+
+  get(key, options) {
+    return this.bucket.get(key, options);
+  }
+
+  delete(keys) {
+    return this.bucket.delete(keys);
+  }
+
+  async deletePrefix(prefix) {
+    let cursor;
+    do {
+      const listing = await this.bucket.list({ prefix, cursor, limit: 500 });
+      const keys = listing.objects.map((object) => object.key);
+      if (keys.length) await this.bucket.delete(keys);
+      cursor = listing.truncated ? listing.cursor : undefined;
+    } while (cursor);
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* The hub                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -192,7 +325,9 @@ export class HubCore {
     this.sql = sql;
     this.env = env || {};
     this.failures = new Map();
+    this.store = null;
     for (const statement of SCHEMA) this.sql.exec(statement);
+    this.store = this.env.FILES ? new R2Store(this.env.FILES) : new SqlStore(this.sql);
     this.routes = [];
     this.defineRoutes();
   }
@@ -212,8 +347,7 @@ export class HubCore {
   }
 
   get files() {
-    if (!this.env.FILES) throw requestError('File storage is not set up on this server.', 503);
-    return this.env.FILES;
+    return this.store;
   }
 
   get maxUpload() {
@@ -226,13 +360,7 @@ export class HubCore {
   }
 
   async deleteBlobPrefix(prefix) {
-    let cursor;
-    do {
-      const listing = await this.files.list({ prefix, cursor, limit: 500 });
-      const keys = listing.objects.map((object) => object.key);
-      if (keys.length) await this.files.delete(keys);
-      cursor = listing.truncated ? listing.cursor : undefined;
-    } while (cursor);
+    await this.files.deletePrefix(prefix);
   }
 
   /* ---------------- accounts ---------------- */
@@ -901,6 +1029,7 @@ export class HubCore {
         name: SERVER_NAME,
         server: true,
         storage: 'server',
+        files: this.store.name,
         version: 'worker 1',
         oauth: { authorize: '/oauth/authorize', token: '/oauth/token', userInfo: '/oauth/userinfo' },
         limits: { uploadBytes: this.maxUpload },

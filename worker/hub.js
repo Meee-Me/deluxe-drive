@@ -25,13 +25,20 @@ const LINK_TTL_SECONDS = 60;
 const DOCS_SESSION_SECONDS = 30 * 24 * 60 * 60;
 const APP_SESSION_SECONDS = 30 * 24 * 60 * 60;
 // The other Deluxe sites that can connect with a link id, and what their key
-// may do. Docs reads; Convert only adds files.
+// may do. Docs reads; Convert and Translate only add files, each into its own
+// folder at the top of the drive.
 const LINK_APPS = {
   'deluxe-docs': { name: 'Deluxe Docs', scope: 'drive.read' },
-  'deluxe-convert': { name: 'Deluxe Convert', scope: 'drive.import' },
+  'deluxe-convert': { name: 'Deluxe Convert', scope: 'drive.import', folder: 'Deluxe Convert' },
+  'deluxe-translate': { name: 'Deluxe Translate', scope: 'drive.import', folder: 'Deluxe Translate' },
 };
 const DEFAULT_LINK_APP = 'deluxe-docs';
-const IMPORT_FOLDER = 'Deluxe Convert';
+// A drive's own session that calls /api/import files like Deluxe Convert.
+const DEFAULT_IMPORT_APP = 'deluxe-convert';
+const importApp = (session) =>
+  session && session.clientId && LINK_APPS[session.clientId] && LINK_APPS[session.clientId].folder
+    ? session.clientId
+    : DEFAULT_IMPORT_APP;
 const LINK_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
 
@@ -741,13 +748,13 @@ export class HubCore {
     return `${stem} (${Date.now()})${tail}`;
   }
 
-  async importFolder(accountId) {
+  async importFolder(accountId, folderName = LINK_APPS[DEFAULT_IMPORT_APP].folder) {
     const existing = (await this.listNodes(accountId)).find(
       (node) =>
         node.type === 'folder' &&
         !node.trashed &&
         !node.parentId &&
-        String(node.name || '').toLowerCase() === IMPORT_FOLDER.toLowerCase()
+        String(node.name || '').toLowerCase() === folderName.toLowerCase()
     );
     if (existing) return existing.id;
     const now = Date.now();
@@ -756,7 +763,7 @@ export class HubCore {
       ownerId: accountId,
       parentId: null,
       type: 'folder',
-      name: await this.uniqueChildName(accountId, null, IMPORT_FOLDER),
+      name: await this.uniqueChildName(accountId, null, folderName),
       mime: '',
       size: 0,
       starred: false,
@@ -769,7 +776,7 @@ export class HubCore {
     return folder.id;
   }
 
-  async importFile(accountId, name, mime, request) {
+  async importFile(accountId, name, mime, request, app = DEFAULT_IMPORT_APP) {
     const id = HubCore.newNodeId();
     const size = await this.saveBlob(accountId, id, request, mime);
     if (!size) {
@@ -780,12 +787,12 @@ export class HubCore {
       await this.deleteBlob(accountId, id);
       throw requestError('That file is too large for Deluxe Drive.', 413);
     }
-    return this.finishImport(accountId, id, name, mime, size);
+    return this.finishImport(accountId, id, name, mime, size, app);
   }
 
   // The file's contents are stored under id; this files it in the drive.
-  async finishImport(accountId, id, name, mime, size) {
-    const parentId = await this.importFolder(accountId);
+  async finishImport(accountId, id, name, mime, size, app = DEFAULT_IMPORT_APP) {
+    const parentId = await this.importFolder(accountId, LINK_APPS[app].folder);
     const now = Date.now();
     const node = {
       id,
@@ -800,7 +807,7 @@ export class HubCore {
       trashedAt: null,
       createdAt: now,
       updatedAt: now,
-      source: 'deluxe-convert',
+      source: app,
     };
     await this.putNode(accountId, node);
     return node;
@@ -963,16 +970,17 @@ export class HubCore {
     const session = token ? await this.sessionFor(token) : null;
     if (!session) return [null, json(401, { error: 'Sign in to Deluxe Drive again.', code: 'unauthorized' })];
 
-    // The key Deluxe Convert gets for a link id may add files and say whose
-    // drive it is, and nothing else: it cannot list, read or change files.
-    if (session.clientId === 'deluxe-convert') {
+    // The key Deluxe Convert or Deluxe Translate gets for a link id may add
+    // files and say whose drive it is, and nothing else: it cannot list, read
+    // or change files.
+    if (session.clientId && LINK_APPS[session.clientId] && LINK_APPS[session.clientId].scope === 'drive.import') {
       const path = new URL(request.url).pathname;
       const allowed =
         (request.method === 'POST' && path === '/api/import') ||
         (request.method === 'POST' && /^\/api\/import\/[^/]+\/share$/.test(path)) ||
         (request.method === 'GET' && path === '/api/auth/me');
       if (!allowed) {
-        return [null, json(403, { error: 'Deluxe Convert can only add files to this drive.', code: 'import-only' })];
+        return [null, json(403, { error: `${LINK_APPS[session.clientId].name} can only add files to this drive.`, code: 'import-only' })];
       }
       return [session, null];
     }
@@ -1323,7 +1331,9 @@ export class HubCore {
       const [session, denied] = await this.need(request);
       if (denied) return denied;
       const node = await this.getNode(session.userId, params.id);
-      if (!node || node.type !== 'file' || node.trashed || node.source !== 'deluxe-convert') {
+      // An app's key may only link files that app added.
+      const allowed = session.clientId ? node && node.source === session.clientId : node && node.source && LINK_APPS[node.source];
+      if (!node || node.type !== 'file' || node.trashed || !allowed) {
         return json(404, { error: 'That file is no longer in Deluxe Drive. Share it again.' });
       }
       const token = await this.ensureShare(session.userId, node.id, node.name);
@@ -1360,8 +1370,8 @@ export class HubCore {
             await this.deleteBlob(session.userId, id);
             return json(400, { error: 'That file is empty.' });
           }
-          const node = await this.finishImport(session.userId, id, name, mime, part.received);
-          const result = { ok: true, file: { id: node.id, name: node.name, size: node.size, mime: node.mime }, folder: IMPORT_FOLDER };
+          const node = await this.finishImport(session.userId, id, name, mime, part.received, importApp(session));
+          const result = { ok: true, file: { id: node.id, name: node.name, size: node.size, mime: node.mime }, folder: LINK_APPS[importApp(session)].folder };
           if (url.searchParams.get('share') === '1') {
             const token = await this.ensureShare(session.userId, node.id, node.name);
             result.share = { token, url: `${origin(url)}/s/${token}` };
@@ -1372,8 +1382,8 @@ export class HubCore {
         }
       }
       try {
-        const node = await this.importFile(session.userId, name, mime, request);
-        const result = { ok: true, file: { id: node.id, name: node.name, size: node.size, mime: node.mime }, folder: IMPORT_FOLDER };
+        const node = await this.importFile(session.userId, name, mime, request, importApp(session));
+        const result = { ok: true, file: { id: node.id, name: node.name, size: node.size, mime: node.mime }, folder: LINK_APPS[importApp(session)].folder };
         if (url.searchParams.get('share') === '1') {
           const token = await this.ensureShare(session.userId, node.id, node.name);
           result.share = { token, url: `${origin(url)}/s/${token}` };

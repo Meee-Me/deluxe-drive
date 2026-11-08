@@ -16,6 +16,8 @@ const DOCS_KEY = 'dd.docs';
 export const DOCS_URL = 'https://deluxe-docs-iota.vercel.app';
 // Where Deluxe Convert lives. Its link id lets it add converted files here.
 export const CONVERT_URL = 'https://deluxe-convert.vercel.app';
+// Where Deluxe Translate lives. Its link id lets it save translations here.
+export const TRANSLATE_URL = 'https://deluxe-translate-app.vercel.app';
 // The drive's server runs on Vercel next to the page (api/hub.mjs). Copies of
 // the page served elsewhere (GitHub Pages, a preview) use it, so accounts and
 // files are the same wherever the drive is opened.

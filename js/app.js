@@ -8,7 +8,7 @@ import { mountPdf, mountScaled, closeViewer } from './viewer.js';
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 32';
+const BUILD = 'build 33';
 
 // The drive keeps its files in this browser's IndexedDB, or - when the page is
 // served by the Deluxe Drive server - on that server, under the signed-in
@@ -1874,7 +1874,7 @@ function showCredits() {
 /* ------------------------------------------------------------------ */
 
 // The sites that connect with a link id. Docs gets a key that can only read
-// files; Convert one that can only add converted files to the drive.
+// files; Convert and Translate one that can only add files to the drive.
 const LINK_APPS = {
   docs: {
     app: 'deluxe-docs',
@@ -1889,6 +1889,15 @@ const LINK_APPS = {
     intro:
       'Tap <b>Generate link ID</b>, then <b>Open Deluxe Convert</b>. After that, every converted file has ' +
       '<b>Share to Deluxe Drive</b>, which adds it to a <b>Deluxe Convert</b> folder here. Convert can only add files: ' +
+      'it cannot see or change the rest of your drive.',
+  },
+  translate: {
+    app: 'deluxe-translate',
+    name: 'Deluxe Translate',
+    url: cloud.TRANSLATE_URL,
+    intro:
+      'Tap <b>Generate link ID</b>, then <b>Open Deluxe Translate</b>. After that, every translation has ' +
+      '<b>Save to Deluxe Drive</b>, which keeps it in a <b>Deluxe Translate</b> folder here. Translate can only add files: ' +
       'it cannot see or change the rest of your drive.',
   },
 };
@@ -1960,7 +1969,7 @@ function showLinkDialog(kind = 'docs') {
       // The code rides after # so it never reaches a server log. Convert is
       // also told which drive server to send files to.
       const hash = new URLSearchParams({ link: linkId });
-      if (kind === 'convert') hash.set('drive', cloud.serverAddress());
+      if (kind === 'convert' || kind === 'translate') hash.set('drive', cloud.serverAddress());
       openSite.href = `${target.url}/#${hash.toString()}`;
       box.hidden = false;
       make.textContent = 'Make a new code';
@@ -2203,6 +2212,7 @@ function bindUI() {
         { action: 'password', label: 'Change password', icon: 'lock' },
         { action: 'docs', label: 'Connect Deluxe Docs', icon: 'doc' },
         { action: 'convert', label: 'Connect Deluxe Convert', icon: 'upload' },
+        { action: 'translate', label: 'Connect Deluxe Translate', icon: 'translate' },
         ...(cloud.isOnline() ? [{ action: 'shares', label: 'Shared links', icon: 'link' }] : []),
         { action: 'credits', label: 'Credits', icon: 'info' },
         { action: 'lock', label: 'Lock drive', icon: 'logout' },
@@ -2212,6 +2222,7 @@ function bindUI() {
         if (action === 'password') changePasswordFlow();
         else if (action === 'docs') showLinkDialog('docs');
         else if (action === 'convert') showLinkDialog('convert');
+        else if (action === 'translate') showLinkDialog('translate');
         else if (action === 'shares') showSharesDialog();
         else if (action === 'credits') showCredits();
         else if (action === 'lock') lockDrive();

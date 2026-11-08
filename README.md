@@ -43,6 +43,9 @@ shared — and it can hand a document to **Deluxe Docs**.
   link ID**, then **Open Deluxe Convert**. From then on, every converted file in Deluxe Convert has
   **Share to Deluxe Drive**, which adds it to a **Deluxe Convert** folder here (and can make a share
   link for it). Convert's key can only add files. Coming back to the drive's tab shows new files.
+- **Deluxe Translate** — *Connect Deluxe Translate* in the account menu works the same way: **Generate link
+  ID**, then **Open Deluxe Translate**. Every translation then has **Save to Deluxe Drive**, which keeps the
+  original and the translation as a text file in a **Deluxe Translate** folder here. Its key can only add files.
 - **Deluxe apps** — the **Apps** button in the top bar (and **Deluxe apps** on the lock screen) opens the
   app switcher shared by every Deluxe site (`deluxe-apps.js`): Drive, Docs, Convert, Translate and YouTube
   Guider AI, each with its icon.

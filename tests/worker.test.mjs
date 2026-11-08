@@ -273,6 +273,33 @@ for (let i = 0; i < 8; i++) await call('POST', '/api/link/redeem', { body: { lin
 assert.equal((await call('POST', '/api/link/redeem', { body: { linkId: 'AAAA-BBBB-CCCC' }, headers: { 'cf-connecting-ip': '9.9.9.9' } })).status, 429);
 assert.equal((await call('POST', '/api/link/redeem', { body: { linkId: 'AAAA-BBBB-CCCC' }, headers: { 'cf-connecting-ip': '8.8.8.8' } })).status, 404); ok('guessing link ids is throttled per address');
 
+// Deluxe Translate: its own link ids, a key that can only add files, its own folder
+{
+  const tl = await j(await call('POST', '/api/link', { token: T, body: { app: 'deluxe-translate' } }));
+  assert.equal(tl.app, 'deluxe-translate');
+  assert.equal((await call('POST', '/api/link/redeem', { body: { linkId: tl.linkId, app: 'deluxe-convert' } })).status, 409);
+  r = await call('POST', '/api/link/redeem', { body: { linkId: tl.linkId, app: 'deluxe-translate' } });
+  assert.equal(r.status, 200); const tr = await j(r); assert.equal(tr.scope, 'drive.import');
+  const TK = tr.token;
+  const text = new TextEncoder().encode('Bonjour\n---\nHello');
+  r = await call('POST', '/api/import', { token: TK, raw: text, headers: { 'Content-Type': 'text/plain', 'X-Deluxe-Name': encodeURIComponent('French to English.txt'), 'Content-Length': String(text.length) } });
+  assert.equal(r.status, 201); const saved = await j(r);
+  assert.equal(saved.folder, 'Deluxe Translate'); assert.equal(saved.file.name, 'French to English.txt');
+  const nodesNow = (await j(await call('GET', '/api/db/nodes', { token: T }))).nodes;
+  const folder = nodesNow.find((x) => x.type === 'folder' && x.name === 'Deluxe Translate');
+  assert.ok(folder); assert.equal(nodesNow.find((x) => x.id === saved.file.id).parentId, folder.id);
+  assert.equal(nodesNow.find((x) => x.id === saved.file.id).source, 'deluxe-translate');
+  assert.equal((await call('POST', `/api/import/${saved.file.id}/share`, { token: TK })).status, 200);
+  assert.equal((await call('GET', '/api/db/nodes', { token: TK })).status, 403);
+  assert.equal((await call('GET', `/api/db/blobs/${saved.file.id}`, { token: TK })).status, 403);
+  const denied = await j(await call('DELETE', `/api/db/nodes/${saved.file.id}`, { token: TK }));
+  assert.match(denied.error, /Deluxe Translate can only add files/);
+  assert.equal((await j(await call('GET', '/api/auth/me', { token: TK }))).user.id, acct.user.id);
+  await call('DELETE', '/api/link/session', { token: TK });
+  for (const x of [saved.file.id, folder.id]) await call('DELETE', `/api/db/nodes/${x}`, { token: T });
+  ok('deluxe translate connects with its own link id and saves into a Deluxe Translate folder');
+}
+
 // big files in pieces (a Vercel Function takes about 4.5 MB per request)
 const health2 = await j(await call('GET', '/api/health'));
 if (!useR2) {

@@ -37,6 +37,8 @@ shared — and it can hand a document to **Deluxe Docs**.
   a 60-second, one-use code that is pasted into Deluxe Docs to connect it to this account (read
   only). Once connected, opening a document (Word, Excel, slides, PDF, text) shares it and opens it
   in Deluxe Docs; if that fails, it opens in the built-in preview.
+- **Convert with Deluxe Convert** — in a file's menu: Deluxe Convert opens with the file already added,
+  ready to convert and share back.
 - **Deluxe Convert** — *Connect Deluxe Convert* in the account menu works the same way: **Generate
   link ID**, then **Open Deluxe Convert**. From then on, every converted file in Deluxe Convert has
   **Share to Deluxe Drive**, which adds it to a **Deluxe Convert** folder here (and can make a share
@@ -86,35 +88,42 @@ server/oauth.js     Authorization Code + PKCE for Deluxe Docs
 
 The drive lives at **https://deluxe-drive-xi.vercel.app**. Vercel serves the page, and a Vercel Function
 (`api/hub.mjs`) is its server: accounts, files, share links, and link IDs for Deluxe Docs and Deluxe
-Convert. It runs the same server code as the Cloudflare Worker (`worker/hub.js`) and keeps everything in
-**Postgres**, because a Vercel Function has no disk of its own.
+Convert. It runs the same server code as the Cloudflare Worker (`worker/hub.js`).
 
-Set it up once:
+**Storage: Vercel Blob, nothing to set up.** The private Blob store `deluxe-drive-files` is connected to the
+project, which gives the function `BLOB_READ_WRITE_TOKEN`. `api/_blob.mjs` keeps:
 
-1. In Vercel, open the **deluxe-drive** project → **Storage** → **Create Database** → **Neon (Postgres)**
-   (the free plan is enough) → connect it to the project for all environments. Vercel then sets
-   `DATABASE_URL` (`POSTGRES_URL` also works).
-2. **Redeploy** (Deployments → ⋯ → Redeploy), so the function sees the new variable.
-3. Open https://deluxe-drive-xi.vercel.app/api/health. It should say `"ok":true`. The tables are made
-   on first use.
+- the drive's records (accounts, file list, share links, link IDs, sessions) in one private blob,
+  `deluxe-drive/state.json`. Each request reads it again if it changed, and a change is written back
+  only if nobody else wrote in between (an ETag check). A clash answers 503 “try again” and the page and
+  Deluxe Convert send it again by themselves.
+- each file as private blobs under `deluxe-drive/files/`, one per piece of up to 4 MB, read back with
+  Range requests (video and PDF seek).
 
-Until a database is connected, `/api/health` answers that there is none, the page says so, and files
-stay in the browser as before.
+Reading the drive costs no Blob writes; each change (an upload, a rename, a sign-in) is one. If
+`DATABASE_URL` / `POSTGRES_URL` is set instead of a Blob store, Postgres is used (`api/_pg.mjs`).
 
 ```
 api/hub.mjs        the Vercel Function: /api/* and /s/* (vercel.json rewrites them here)
-api/_pg.mjs        Postgres for the server code (? placeholders, BYTEA, BIGINT)
+api/_blob.mjs      storage on Vercel Blob (the default)
+api/_pg.mjs        storage on Postgres (optional)
 vercel.json        the rewrites, function settings and cache headers
 .vercelignore      files that are not part of the Vercel site
-tests/vercel-dev.mjs   DATABASE_URL=postgres://... node tests/vercel-dev.mjs  (a local stand-in)
 ```
 
 A Vercel Function takes about 4.5 MB per request, so bigger files go up in 4 MB pieces
 (`PUT /api/db/blobs/:id?offset=…&last=1`, and the same for `/api/import`). The page and Deluxe Convert
-do this by themselves; a file can still be up to 100 MB. Files are kept in the database in 1 MB pieces,
-so the database's size is the drive's size (0.5 GB on Neon's free plan).
+do this by themselves; a file can still be up to 100 MB.
 
-Tests: `PG_URL=postgres://... node tests/worker.test.mjs` runs the server tests on Postgres.
+Tests and local runs:
+
+```
+node tests/worker.test.mjs              # the server, files in SQLite
+STORE=blob node tests/worker.test.mjs   # the server on (fake) Vercel Blob, as on Vercel
+node tests/blob.test.mjs                # Vercel Blob across instances: cold starts, clashes
+PG_URL=postgres://... node tests/worker.test.mjs
+FAKE_BLOB=1 node tests/vercel-dev.mjs 8787   # the whole site as on Vercel, in memory
+```
 
 ## On Cloudflare (Workers)
 

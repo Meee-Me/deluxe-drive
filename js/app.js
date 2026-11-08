@@ -649,6 +649,7 @@ function openNodeMenu(id, anchor) {
         }
       }
       if (cloud.docsReady()) items.push({ action: 'docs', label: 'Open in Deluxe Docs', icon: 'doc' });
+      if (cloud.isOnline()) items.push({ action: 'convert', label: 'Convert with Deluxe Convert', icon: 'upload' });
     }
     items.push({
       action: 'star',
@@ -675,6 +676,11 @@ async function performNodeAction(action, id) {
 
   if (action === 'docs') {
     openInDocs(node);
+    return;
+  }
+
+  if (action === 'convert') {
+    openInConvert(node);
     return;
   }
 
@@ -952,6 +958,19 @@ async function openInDocs(node) {
   } catch (error) {
     toast(error.message || 'Deluxe Docs could not be opened');
     openPreview(node);
+  }
+}
+
+// Hands the file to Deluxe Convert through a share link: Convert opens with
+// the file already added, ready to convert (and to share back here).
+async function openInConvert(node) {
+  try {
+    await cloud.openInConvert(node);
+    state.shared.add(node.id);
+    render();
+    toast(`Opening “${node.name}” in Deluxe Convert`);
+  } catch (error) {
+    toast(error.message || 'Deluxe Convert could not be opened');
   }
 }
 

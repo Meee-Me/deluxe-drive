@@ -179,17 +179,23 @@ async function request(path, options = {}) {
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
 
   let response;
-  try {
-    response = await fetch(`${state.base}${path}`, {
-      ...options,
-      headers,
-      credentials: 'same-origin',
-      cache: 'no-store',
-    });
-  } catch (error) {
-    const failure = new Error('The Deluxe Drive server could not be reached.');
-    failure.offline = true;
-    throw failure;
+  // The server answers 503 with Retry-After when two changes met at the same
+  // moment and it kept the other one: this change is simply sent again.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      response = await fetch(`${state.base}${path}`, {
+        ...options,
+        headers,
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
+    } catch (error) {
+      const failure = new Error('The Deluxe Drive server could not be reached.');
+      failure.offline = true;
+      throw failure;
+    }
+    if (response.status !== 503 || !response.headers.get('retry-after') || attempt >= 2) break;
+    await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
   }
 
   // A token the server no longer knows (it restarted, or it expired) must not
@@ -522,6 +528,32 @@ export async function openInDocs(node) {
     if (tab) tab.location.href = url;
     else location.href = url;
     return url;
+  } catch (error) {
+    if (tab) {
+      try {
+        tab.close();
+      } catch (closeError) {
+        /* the tab may already be gone */
+      }
+    }
+    throw error;
+  }
+}
+
+// Opens a file in Deluxe Convert: shared first, then Convert reads it from
+// the share link (?url=) and adds it to its list. The tab is opened before the
+// share is asked for, so the browser counts it as part of the click.
+export async function openInConvert(node) {
+  if (!isOnline()) throw new Error('Deluxe Convert needs the Deluxe Drive server.');
+  const tab = window.open('about:blank', '_blank');
+  try {
+    const share = await shareFile(node.id);
+    const target = new URL(CONVERT_URL);
+    target.searchParams.set('url', share.url);
+    target.searchParams.set('name', node.name);
+    if (tab) tab.location.href = target.toString();
+    else location.href = target.toString();
+    return target.toString();
   } catch (error) {
     if (tab) {
       try {

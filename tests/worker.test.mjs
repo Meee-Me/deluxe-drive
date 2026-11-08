@@ -1,15 +1,18 @@
 // Runs the server code (worker/hub.js) in Node: node:sqlite stands in for the
 // Durable Object's SQL, and a Map stands in for R2. Run: node tests/worker.test.mjs
-// STORE=r2 keeps files in a fake R2 bucket. PG_URL=postgres://... runs it on
-// Postgres through the Vercel adapter (api/_pg.mjs), as on Vercel.
+// STORE=r2 keeps files in a fake R2 bucket. STORE=blob runs it the way the
+// Vercel Function does by default (api/_blob.mjs, on a fake Vercel Blob).
+// PG_URL=postgres://... runs it on Postgres through api/_pg.mjs.
 import assert from 'node:assert/strict';
 import { pbkdf2Sync, randomBytes } from 'node:crypto';
 import { HubCore } from '../worker/hub.js';
-import { NodeSql, FakeR2 } from './fakes.mjs';
+import { NodeSql, FakeR2, FakeBlobSdk } from './fakes.mjs';
 
 const origin = 'https://drive.test';
 // STORE=r2 runs against a fake R2 bucket; the default keeps files in SQLite.
 const useR2 = process.env.STORE === 'r2';
+const useBlob = process.env.STORE === 'blob';
+const blobSdk = new FakeBlobSdk();
 const pgUrl = process.env.PG_URL || '';
 const files = new FakeR2();
 let sqlAdapter;
@@ -18,13 +21,23 @@ if (pgUrl) {
   sqlAdapter = new PgSql(pgUrl);
   for (const t of ['meta', 'accounts', 'nodes', 'settings', 'blobs', 'shares', 'sessions', 'link_codes', 'chunks']) await sqlAdapter.exec(`DROP TABLE IF EXISTS ${t}`);
 } else sqlAdapter = new NodeSql();
-// Small pieces here so the piece-by-piece upload is tested with small files.
-const hub = new HubCore(sqlAdapter, useR2 ? { FILES: files } : { MAX_REQUEST_BYTES: 4 * 1024 * 1024 });
+let hub;
+let blobBackend = null;
+if (useBlob) {
+  const { BlobBackend } = await import('../api/_blob.mjs');
+  blobBackend = new BlobBackend(blobSdk, (sql, store) => new HubCore(sql, { MAX_REQUEST_BYTES: 4 * 1024 * 1024, FILE_STORE: store }));
+  sqlAdapter = blobBackend.state;
+  hub = blobBackend;
+} else {
+  hub = new HubCore(sqlAdapter, useR2 ? { FILES: files } : { MAX_REQUEST_BYTES: 4 * 1024 * 1024 });
+}
 const q = async (query, ...params) => (await sqlAdapter.exec(query, ...params)).toArray();
 const hasBlob = async (key) => (useR2
   ? files.m.has(key)
-  : Number((await q('SELECT COUNT(*) AS c FROM chunks WHERE key = ?', key))[0].c) > 0);
-console.log('file storage:', useR2 ? 'r2 (fake)' : pgUrl ? 'postgres' : 'sqlite');
+  : useBlob
+    ? q('SELECT COUNT(*) AS c FROM blob_parts WHERE key = ?', key).then((r) => Number(r[0].c) > 0).catch(() => false)
+    : Number((await q('SELECT COUNT(*) AS c FROM chunks WHERE key = ?', key))[0].c) > 0);
+console.log('file storage:', useR2 ? 'r2 (fake)' : useBlob ? 'vercel blob (fake)' : pgUrl ? 'postgres' : 'sqlite');
 
 async function call(method, path, { token, body, headers = {}, raw } = {}) {
   const h = { ...headers };
@@ -43,7 +56,7 @@ const ok = (name) => console.log(`ok ${++n} ${name}`);
 
 // health
 let r = await call('GET', '/api/health');
-assert.equal(r.status, 200); const health = await j(r); assert.equal(health.server, true); assert.equal(health.files, useR2 ? 'r2' : 'sqlite'); ok('health');
+assert.equal(r.status, 200); const health = await j(r); assert.equal(health.server, true); assert.equal(health.files, useR2 ? 'r2' : useBlob ? 'vercel-blob' : 'sqlite'); ok('health');
 
 // account
 const salt = randomBytes(16).toString('hex');
@@ -119,7 +132,7 @@ assert.deepEqual(new Uint8Array(await r.arrayBuffer()), big.slice(big.length - 5
 await call('PUT', '/api/db/blobs/big', { token: T, raw: new Uint8Array(10).fill(9), headers: { 'Content-Length': '10' } });
 r = await call('GET', '/api/db/blobs/big', { token: T });
 assert.deepEqual(new Uint8Array(await r.arrayBuffer()), new Uint8Array(10).fill(9));
-if (!useR2) assert.equal(Number((await q('SELECT COUNT(*) AS c FROM chunks WHERE key LIKE ?', '%/big'))[0].c), 1);
+if (!useR2 && !useBlob) assert.equal(Number((await q('SELECT COUNT(*) AS c FROM chunks WHERE key LIKE ?', '%/big'))[0].c), 1);
 await call('DELETE', '/api/db/blobs/big', { token: T });
 ok('multi-piece file, boundary range, overwrite');
 
@@ -206,6 +219,8 @@ const payload = new TextEncoder().encode('converted!');
 const imp = async (name, extra = '') => call('POST', '/api/import' + extra, { token: C, raw: payload, headers: { 'Content-Type': 'text/plain', 'X-Deluxe-Name': encodeURIComponent(name), 'Content-Length': String(payload.length) } });
 r = await imp('Report ü.txt');
 assert.equal(r.status, 201); const im1 = await j(r);
+{ const sh = await call('POST', `/api/import/${im1.file.id}/share`, { token: C }); assert.equal(sh.status, 200); assert.match((await j(sh)).share.url, /\/s\/[0-9a-f]+$/); }
+assert.equal((await call('POST', '/api/import/f_1/share', { token: C })).status, 404); // only files Convert added
 assert.equal(im1.file.name, 'Report ü.txt'); assert.equal(im1.file.size, payload.length); assert.equal(im1.folder, 'Deluxe Convert');
 r = await imp('Report ü.txt', '?share=1');
 const im2 = await j(r);

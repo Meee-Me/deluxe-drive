@@ -4,6 +4,7 @@
   "description": "Deluxe Drive: the page, plus its server (a Cloudflare Worker in worker/, a Vercel Function in api/).",
   "engines": { "node": ">=20" },
   "dependencies": {
+    "@vercel/blob": "2.8.2",
     "pg": "8.13.1"
   }
 }

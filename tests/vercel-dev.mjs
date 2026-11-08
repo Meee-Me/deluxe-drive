@@ -1,12 +1,20 @@
 // A local stand-in for the drive on Vercel: static files, plus /api/* and /s/*
 // sent to the Vercel Function (api/hub.mjs) the way vercel.json rewrites them.
-// Needs Postgres: DATABASE_URL=postgres://... node tests/vercel-dev.mjs [port]
+//   FAKE_BLOB=1 node tests/vercel-dev.mjs [port]   Vercel Blob storage, faked in memory
+//   DATABASE_URL=postgres://... node tests/vercel-dev.mjs [port]   Postgres
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import * as fn from '../api/hub.mjs';
+import { HubCore } from '../worker/hub.js';
+import { BlobBackend } from '../api/_blob.mjs';
+import { FakeBlobSdk } from './fakes.mjs';
+
+if (process.env.FAKE_BLOB === '1') {
+  fn.setBackend(new BlobBackend(new FakeBlobSdk(), (sql, files) => new HubCore(sql, fn.hubEnv({ FILE_STORE: files }))));
+}
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const port = Number(process.argv[2] || 8788);

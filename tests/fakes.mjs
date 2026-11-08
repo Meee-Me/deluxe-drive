@@ -37,3 +37,43 @@ export class FakeR2 {
   }
 }
 
+
+// Stands in for the @vercel/blob SDK (2.x): put / get / del with ETags,
+// ifMatch, ifNoneMatch (304), Range reads and random suffixes, all in memory.
+export class FakeBlobSdk {
+  constructor() {
+    this.m = new Map();
+    this.n = 0;
+    this.ops = { put: 0, get: 0, del: 0 };
+    const sdk = this;
+    this.BlobPreconditionFailedError = class extends Error { constructor() { super('Vercel Blob: Precondition failed: ETag mismatch.'); } };
+    this.BlobNotFoundError = class extends Error { constructor() { super('Vercel Blob: The requested blob does not exist'); } };
+    this.put = async (pathname, body, o = {}) => {
+      sdk.ops.put++;
+      if (o.access !== 'public' && o.access !== 'private') throw new Error('Vercel Blob: access must be "private" or "public"');
+      const path = o.addRandomSuffix ? `${pathname}-${(++sdk.n).toString(36)}${Math.random().toString(36).slice(2, 8)}` : pathname;
+      const old = sdk.m.get(path);
+      if (o.ifMatch !== undefined) { if (!old || old.etag !== o.ifMatch) throw new sdk.BlobPreconditionFailedError(); }
+      else if (old && !o.allowOverwrite) throw new Error('Vercel Blob: This blob already exists');
+      let bytes;
+      if (typeof body === 'string') bytes = Buffer.from(body);
+      else if (body && typeof body.getReader === 'function') bytes = Buffer.from(await new Response(body).arrayBuffer());
+      else bytes = Buffer.from(body);
+      const etag = `"e${++sdk.n}"`;
+      sdk.m.set(path, { bytes, etag, contentType: o.contentType });
+      return { pathname: path, url: `https://fake.blob/${path}`, etag };
+    };
+    this.get = async (pathname, o = {}) => {
+      sdk.ops.get++;
+      const e = sdk.m.get(pathname);
+      if (!e) return null;
+      if (o.ifNoneMatch && o.ifNoneMatch === e.etag) return { statusCode: 304, stream: null, blob: { etag: e.etag, pathname } };
+      let b = e.bytes;
+      const range = o.headers && (o.headers.Range || o.headers.range);
+      const m = range && /bytes=(\d+)-(\d+)/.exec(range);
+      if (m) b = b.subarray(Number(m[1]), Number(m[2]) + 1);
+      return { statusCode: 200, stream: new Response(b).body, blob: { etag: e.etag, pathname, size: b.length } };
+    };
+    this.del = async (paths) => { sdk.ops.del++; for (const p of [].concat(paths)) sdk.m.delete(p); };
+  }
+}

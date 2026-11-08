@@ -2,33 +2,46 @@
 //
 // vercel.json sends /api/* and /s/* here. The same server code as the
 // Cloudflare Worker (worker/hub.js) answers: accounts, files, share links and
-// link IDs for Deluxe Docs and Deluxe Convert. Everything is kept in Postgres:
-// connect a database to the project (Storage, Neon) and Vercel sets
-// DATABASE_URL. Without one, /api/health says so and the page keeps files in
-// the browser as before.
+// link IDs for Deluxe Docs and Deluxe Convert. Where it keeps them:
+//   - a Vercel Blob store connected to the project (BLOB_READ_WRITE_TOKEN):
+//     everything in private blobs, see api/_blob.mjs. This is the default.
+//   - or Postgres, when DATABASE_URL / POSTGRES_URL is set instead.
+// With neither, /api/health says so and the page keeps files in the browser.
 import { HubCore } from '../worker/hub.js';
-import { PgSql } from './_pg.mjs';
 
 // A Vercel Function takes about 4.5 MB per request, so bigger files are sent
 // in 4 MB pieces (the drive's page and Deluxe Convert do this by themselves).
 const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
 
-let hub = null;
 export function databaseUrl(env = process.env) {
   return env.DATABASE_URL || env.POSTGRES_URL || env.DATABASE_URL_UNPOOLED || env.POSTGRES_URL_NON_POOLING || '';
 }
 
-function getHub() {
-  const url = databaseUrl();
-  if (!url) return null;
-  if (!hub) {
-    hub = new HubCore(new PgSql(url), {
-      MAX_REQUEST_BYTES,
-      MAX_UPLOAD_BYTES: process.env.MAX_UPLOAD_BYTES,
-      DELUXE_FAKE_SECRET: process.env.DELUXE_FAKE_SECRET,
-    });
+export function hubEnv(extra = {}) {
+  return {
+    MAX_REQUEST_BYTES,
+    MAX_UPLOAD_BYTES: process.env.MAX_UPLOAD_BYTES,
+    DELUXE_FAKE_SECRET: process.env.DELUXE_FAKE_SECRET,
+    ...extra,
+  };
+}
+
+// Something with handle(request) -> Response, made once per instance.
+let backend = null;
+// For the local stand-in (tests/vercel-dev.mjs): use this backend instead.
+export function setBackend(value) {
+  backend = value;
+}
+async function getBackend() {
+  if (backend) return backend;
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    const [sdk, { BlobBackend }] = await Promise.all([import('@vercel/blob'), import('./_blob.mjs')]);
+    backend = new BlobBackend(sdk, (sql, files) => new HubCore(sql, hubEnv({ FILE_STORE: files })));
+  } else if (databaseUrl()) {
+    const { PgSql } = await import('./_pg.mjs');
+    backend = new HubCore(new PgSql(databaseUrl()), hubEnv());
   }
-  return hub;
+  return backend;
 }
 
 // Any site may call the API: every request carries its own bearer token and
@@ -66,7 +79,7 @@ function noDatabase() {
       ok: false,
       server: false,
       error:
-        'Deluxe Drive has no database yet. In Vercel, open the deluxe-drive project, Storage, create a Neon (Postgres) database and connect it, then redeploy.',
+        'Deluxe Drive has no storage yet. In Vercel, open the deluxe-drive project, Storage, connect a Blob store, then redeploy.',
       code: 'no-database',
     }),
     { status: 503, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } }
@@ -75,7 +88,7 @@ function noDatabase() {
 
 export async function handle(request) {
   if (request.method === 'OPTIONS') return withCors(request, new Response(null, { status: 204 }));
-  const core = getHub();
+  const core = await getBackend();
   if (!core) return withCors(request, noDatabase());
   try {
     return withCors(request, await core.handle(originalRequest(request)));

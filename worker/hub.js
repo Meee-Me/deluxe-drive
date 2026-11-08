@@ -337,7 +337,9 @@ export class HubCore {
     this.failures = new Map();
     this.store = null;
     this.readyPromise = null;
-    this.store = this.env.FILES ? new R2Store(this.env.FILES) : new SqlStore(this.sql);
+    // A host can bring its own file store (Vercel Blob, see api/_blob.mjs);
+    // otherwise R2 when bound, else the database itself.
+    this.store = this.env.FILE_STORE || (this.env.FILES ? new R2Store(this.env.FILES) : new SqlStore(this.sql));
     this.routes = [];
     this.defineRoutes();
   }
@@ -967,6 +969,7 @@ export class HubCore {
       const path = new URL(request.url).pathname;
       const allowed =
         (request.method === 'POST' && path === '/api/import') ||
+        (request.method === 'POST' && /^\/api\/import\/[^/]+\/share$/.test(path)) ||
         (request.method === 'GET' && path === '/api/auth/me');
       if (!allowed) {
         return [null, json(403, { error: 'Deluxe Convert can only add files to this drive.', code: 'import-only' })];
@@ -1312,6 +1315,19 @@ export class HubCore {
         user: { id: account.id, name: account.name },
         driveName: SERVER_NAME,
       });
+    });
+
+    // A share link for a file Deluxe Convert added earlier (and only such a
+    // file), so asking for a link later does not upload the file again.
+    r('POST', '/api/import/:id/share', async ({ request, params, url }) => {
+      const [session, denied] = await this.need(request);
+      if (denied) return denied;
+      const node = await this.getNode(session.userId, params.id);
+      if (!node || node.type !== 'file' || node.trashed || node.source !== 'deluxe-convert') {
+        return json(404, { error: 'That file is no longer in Deluxe Drive. Share it again.' });
+      }
+      const token = await this.ensureShare(session.userId, node.id, node.name);
+      return json(200, { file: { id: node.id, name: node.name }, share: { token, url: `${origin(url)}/s/${token}` } });
     });
 
     // Deluxe Convert sends a converted file here: the body is the file, its

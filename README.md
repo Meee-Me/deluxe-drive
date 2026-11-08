@@ -37,6 +37,10 @@ shared — and it can hand a document to **Deluxe Docs**.
   a 60-second, one-use code that is pasted into Deluxe Docs to connect it to this account (read
   only). Once connected, opening a document (Word, Excel, slides, PDF, text) shares it and opens it
   in Deluxe Docs; if that fails, it opens in the built-in preview.
+- **Deluxe Convert** — *Connect Deluxe Convert* in the account menu works the same way: **Generate
+  link ID**, then **Open Deluxe Convert**. From then on, every converted file in Deluxe Convert has
+  **Share to Deluxe Drive**, which adds it to a **Deluxe Convert** folder here (and can make a share
+  link for it). Convert's key can only add files. Coming back to the drive's tab shows new files.
 - **More websites** — a button in the top bar (and a link on the lock screen) opens a list of the
   other Deluxe Lord sites: YouTube Guider AI, Deluxe Convert and Deluxe Translate.
 - **Select mode** — select several items and download, star, move or delete them together, plus
@@ -66,7 +70,7 @@ that, which is how it is published: it starts the server with `node server/index
 index.html          markup for the lock screen and the app shell
 styles.css          all styling, including dark mode and mobile drawer
 js/app.js           app state, rendering, file actions, previews, uploads
-js/cloud.js         the server client: accounts, storage, share links, Deluxe Docs
+js/cloud.js         the server client: accounts, storage, share links, Deluxe Docs and Convert
 js/office.js        reads .docx / .xlsx / .pptx / .odt / .ods / .odp / .rtf in the browser
 js/viewer.js        zoom controls, pinch / Ctrl+wheel, page box, and the all-pages PDF renderer
 vendor/             pinned docx-preview + JSZip (faithful .docx) and PDF.js (PDF pages) builds
@@ -119,6 +123,20 @@ and runs out after 60 seconds. Making a new one ends the previous one, and the d
 when the shown one runs out. Docs gets a key that can **only read** the file list and the files (no
 uploads, deletes, sharing or settings); it lasts 30 days, and **Disconnect** in Docs ends it. Wrong
 guesses are slowed down per address.
+
+## Deluxe Convert
+
+Deluxe Convert (`https://deluxe-convert-cloud.deluxelordd.workers.dev`) connects with a link ID too:
+account menu → **Connect Deluxe Convert** → **Generate link ID** → **Open Deluxe Convert** (or type the
+code into Convert's **Connect Deluxe Drive** box). Link IDs are made for one app: a Docs code does not
+work in Convert, and a Convert code does not work in Docs. Making a new one only ends the earlier code
+for the same app.
+
+Convert posts the code to `/api/link/redeem` with `"app": "deluxe-convert"` and gets a key (30 days)
+that may only call `POST /api/import` and `GET /api/auth/me`. `POST /api/import` takes the file as the
+body, its name in `X-Deluxe-Name` (URI-encoded) and its type in `Content-Type`. The file is put in a
+**Deluxe Convert** folder at the top of the drive (made if missing), with ` (1)`, ` (2)` … added when
+the name is taken. `?share=1` also makes a share link and returns it.
 
 After the first link ID, opening a document in the drive hands it to Deluxe Docs through a share link
 (`…?url=<share link>&name=<file name>`). Those links are listed under **Shared links** in the account

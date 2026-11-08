@@ -1425,6 +1425,25 @@ function stepPreview(delta) {
   if (node) openPreview(node);
 }
 
+let refreshing = false;
+async function refreshFromServer() {
+  if (refreshing || !cloud.isOnline() || !state.currentUser || $('#app').classList.contains('hidden')) return;
+  refreshing = true;
+  try {
+    const fileCount = () => [...state.nodes.values()].filter((node) => node.type === 'file' && !node.trashed).length;
+    const before = fileCount();
+    await loadNodes();
+    await refreshShares();
+    render();
+    const added = fileCount() - before;
+    if (added > 0) toast(added === 1 ? '1 new file' : `${added} new files`);
+  } catch (error) {
+    /* keep showing what is already here */
+  } finally {
+    refreshing = false;
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Uploads                                                             */
 /* ------------------------------------------------------------------ */
@@ -1821,30 +1840,51 @@ function showCredits() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Deluxe Docs connection                                              */
+/* Connecting Deluxe Docs and Deluxe Convert                           */
 /* ------------------------------------------------------------------ */
 
-// Account menu > Connect Deluxe Docs: one button that makes a link id. The id
-// is copied, pasted into Deluxe Docs, and Docs finds this account from it. Each
-// id works once and for 60 seconds; while this stays open a fresh one replaces
-// it when it runs out.
-function showDocsDialog() {
+// The sites that connect with a link id. Docs gets a key that can only read
+// files; Convert one that can only add converted files to the drive.
+const LINK_APPS = {
+  docs: {
+    app: 'deluxe-docs',
+    name: 'Deluxe Docs',
+    url: cloud.DOCS_URL,
+    intro: 'Tap <b>Generate link ID</b>, then <b>Open Deluxe Docs</b>. Your files open there, nothing to copy.',
+  },
+  convert: {
+    app: 'deluxe-convert',
+    name: 'Deluxe Convert',
+    url: cloud.CONVERT_URL,
+    intro:
+      'Tap <b>Generate link ID</b>, then <b>Open Deluxe Convert</b>. After that, every converted file has ' +
+      '<b>Share to Deluxe Drive</b>, which adds it to a <b>Deluxe Convert</b> folder here. Convert can only add files: ' +
+      'it cannot see or change the rest of your drive.',
+  },
+};
+
+// Account menu > Connect Deluxe Docs / Connect Deluxe Convert: one button that
+// makes a link id. The id is opened in (or pasted into) the other site, and it
+// finds this account from it. Each id works once and for 60 seconds; while this
+// stays open a fresh one replaces it when it runs out.
+function showLinkDialog(kind = 'docs') {
   const root = $('#dialog');
+  const target = LINK_APPS[kind] || LINK_APPS.docs;
   if (!root) return;
 
   const online = cloud.isOnline();
   root.innerHTML = `
     <div class="dialog-backdrop" data-close="1"></div>
-    <div class="dialog docs-dialog" role="dialog" aria-modal="true" aria-label="Connect Deluxe Docs">
-      <h2>Connect Deluxe Docs</h2>
+    <div class="dialog docs-dialog" role="dialog" aria-modal="true" aria-label="Connect ${target.name}">
+      <h2>Connect ${target.name}</h2>
       <p class="dialog-msg">${
         online
-          ? 'Tap <b>Generate link ID</b>, then <b>Open Deluxe Docs</b>. Your files open there, nothing to copy.'
+          ? target.intro
           : 'This needs the Deluxe Drive server. Open the drive at its workers.dev address and try again.'
       }</p>
       <div class="link-id" id="link-id" hidden>
-        <a class="btn primary link-id-open" id="link-id-open" href="#" target="_blank" rel="noopener noreferrer">Open Deluxe Docs</a>
-        <p class="link-id-other">On another phone or computer? Open Deluxe Docs there and type:</p>
+        <a class="btn primary link-id-open" id="link-id-open" href="#" target="_blank" rel="noopener noreferrer">Open ${target.name}</a>
+        <p class="link-id-other">On another phone or computer? Open ${target.name} there and type:</p>
         <button class="link-id-code" id="link-id-code" type="button" aria-label="Copy link ID"></button>
         <p class="link-id-note" id="link-id-note" aria-live="polite"></p>
       </div>
@@ -1858,7 +1898,7 @@ function showDocsDialog() {
   const codeButton = root.querySelector('#link-id-code');
   const note = root.querySelector('#link-id-note');
   const make = root.querySelector('#link-id-make');
-  const openDocs = root.querySelector('#link-id-open');
+  const openSite = root.querySelector('#link-id-open');
   let timer = null;
   let left = 0;
   let copied = false;
@@ -1884,11 +1924,14 @@ function showDocsDialog() {
   const generate = async (copyIt) => {
     make.disabled = true;
     try {
-      const { linkId, expiresIn } = await cloud.generateLinkId();
+      const { linkId, expiresIn } = await cloud.generateLinkId(target.app);
       if (closed) return;
       codeButton.textContent = linkId;
-      // The code rides after # so it never reaches a server log.
-      openDocs.href = `${cloud.DOCS_URL}/#link=${encodeURIComponent(linkId)}`;
+      // The code rides after # so it never reaches a server log. Convert is
+      // also told which drive server to send files to.
+      const hash = new URLSearchParams({ link: linkId });
+      if (kind === 'convert') hash.set('drive', cloud.serverAddress());
+      openSite.href = `${target.url}/#${hash.toString()}`;
       box.hidden = false;
       make.textContent = 'Make a new code';
       make.classList.remove('primary');
@@ -1923,8 +1966,8 @@ function showDocsDialog() {
   };
 
   make.addEventListener('click', () => generate(true));
-  // Once Docs opens, the code is used up; close this so it is not reused.
-  openDocs.addEventListener('click', () => setTimeout(close, 300));
+  // Once the other site opens, the code is used up; close this so it is not reused.
+  openSite.addEventListener('click', () => setTimeout(close, 300));
   codeButton.addEventListener('click', async () => {
     copied = await copyText(codeButton.textContent);
     showNote();
@@ -2033,6 +2076,12 @@ function bindUI() {
   if (uiBound) return;
   uiBound = true;
 
+  // Files can arrive from elsewhere (Deluxe Convert's Share to Deluxe Drive),
+  // so coming back to this tab reads the list again.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refreshFromServer();
+  });
+
   $('#theme-btn').innerHTML = icon(theme === 'dark' ? 'sun' : 'moon');
 
   $('#theme-btn').addEventListener('click', () => {
@@ -2123,6 +2172,7 @@ function bindUI() {
       [
         { action: 'password', label: 'Change password', icon: 'lock' },
         { action: 'docs', label: 'Connect Deluxe Docs', icon: 'doc' },
+        { action: 'convert', label: 'Connect Deluxe Convert', icon: 'upload' },
         ...(cloud.isOnline() ? [{ action: 'shares', label: 'Shared links', icon: 'link' }] : []),
         { action: 'credits', label: 'Credits', icon: 'info' },
         { action: 'lock', label: 'Lock drive', icon: 'logout' },
@@ -2130,7 +2180,8 @@ function bindUI() {
       ],
       (action) => {
         if (action === 'password') changePasswordFlow();
-        else if (action === 'docs') showDocsDialog();
+        else if (action === 'docs') showLinkDialog('docs');
+        else if (action === 'convert') showLinkDialog('convert');
         else if (action === 'shares') showSharesDialog();
         else if (action === 'credits') showCredits();
         else if (action === 'lock') lockDrive();

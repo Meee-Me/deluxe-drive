@@ -176,6 +176,54 @@ const V2 = (await j(await call('POST', '/api/link/redeem', { body: { linkId: l4.
 assert.equal((await call('DELETE', '/api/link/session', { token: V2 })).status, 200);
 assert.equal((await call('GET', '/api/db/nodes', { token: V2 })).status, 401); ok('disconnecting ends the docs key');
 
+// Deluxe Convert: its own link ids, a key that can only add files
+const c1 = await j(await call('POST', '/api/link', { token: T, body: { app: 'deluxe-convert' } }));
+assert.equal(c1.app, 'deluxe-convert');
+const d1 = await j(await call('POST', '/api/link', { token: T })); // a docs id does not end the convert id
+assert.equal((await call('POST', '/api/link', { token: T, body: { app: 'nope' } })).status, 400);
+r = await call('POST', '/api/link/redeem', { body: { linkId: c1.linkId } }); // docs cannot use a convert id
+assert.equal(r.status, 409); assert.equal((await j(r)).code, 'link-wrong-app');
+r = await call('POST', '/api/link/redeem', { body: { linkId: d1.linkId, app: 'deluxe-convert' } });
+assert.equal(r.status, 409);
+r = await call('POST', '/api/link/redeem', { body: { linkId: c1.linkId, app: 'deluxe-convert' } });
+assert.equal(r.status, 200); const conv = await j(r); assert.equal(conv.scope, 'drive.import'); assert.equal(conv.user.name, 'Shivad');
+assert.equal((await call('POST', '/api/link/redeem', { body: { linkId: c1.linkId, app: 'deluxe-convert' } })).status, 404);
+assert.equal((await call('POST', '/api/link/redeem', { body: { linkId: d1.linkId } })).status, 200); // docs id still good
+ok('convert link ids are separate from docs link ids');
+
+const C = conv.token;
+const payload = new TextEncoder().encode('converted!');
+const imp = async (name, extra = '') => call('POST', '/api/import' + extra, { token: C, raw: payload, headers: { 'Content-Type': 'text/plain', 'X-Deluxe-Name': encodeURIComponent(name), 'Content-Length': String(payload.length) } });
+r = await imp('Report ü.txt');
+assert.equal(r.status, 201); const im1 = await j(r);
+assert.equal(im1.file.name, 'Report ü.txt'); assert.equal(im1.file.size, payload.length); assert.equal(im1.folder, 'Deluxe Convert');
+r = await imp('Report ü.txt', '?share=1');
+const im2 = await j(r);
+assert.equal(im2.file.name, 'Report ü (1).txt'); assert.match(im2.share.url, /\/s\/[0-9a-f]+$/);
+assert.equal(await (await call('GET', new URL(im2.share.url).pathname)).text(), 'converted!');
+r = await imp('../../evil');
+assert.equal((await j(r)).file.name, '.._.._evil');
+const after = (await j(await call('GET', '/api/db/nodes', { token: T }))).nodes;
+const folders = after.filter((x) => x.type === 'folder' && x.name === 'Deluxe Convert');
+assert.equal(folders.length, 1); assert.equal(folders[0].ownerId, acct.user.id);
+const imported = after.filter((x) => x.parentId === folders[0].id);
+assert.equal(imported.length, 3); assert.ok(imported.every((x) => x.ownerId === acct.user.id && x.type === 'file' && x.mime === 'text/plain'));
+r = await call('GET', `/api/db/blobs/${im1.file.id}`, { token: T });
+assert.equal(await r.text(), 'converted!'); ok('convert key adds files to a Deluxe Convert folder');
+
+assert.equal((await call('GET', '/api/db/nodes', { token: C })).status, 403);
+assert.equal((await call('GET', `/api/db/blobs/${im1.file.id}`, { token: C })).status, 403);
+assert.equal((await call('PUT', '/api/db/nodes/f_1', { token: C, body: node })).status, 403);
+assert.equal((await call('DELETE', `/api/db/nodes/${im1.file.id}`, { token: C })).status, 403);
+assert.equal((await call('POST', '/api/link', { token: C, body: { app: 'deluxe-convert' } })).status, 403);
+assert.equal((await call('GET', '/api/files/shares', { token: C })).status, 403);
+assert.equal((await j(await call('GET', '/api/auth/me', { token: C }))).user.name, 'Shivad');
+assert.equal((await call('POST', '/api/import', { token: V, raw: payload, headers: { 'Content-Length': String(payload.length) } })).status, 403); // docs key cannot add
+assert.equal((await call('DELETE', '/api/link/session', { token: C })).status, 200);
+assert.equal((await imp('x.txt')).status, 401); ok('convert key can only add files, and disconnect ends it');
+// tidy up so later counts are unchanged
+for (const x of [...imported, ...folders]) await call('DELETE', `/api/db/nodes/${x.id}`, { token: T });
+
 // second account is isolated
 const salt2 = randomBytes(16).toString('hex'); const hash2 = derive('pw2', salt2);
 const other = await j(await call('POST', '/api/accounts', { body: { name: 'Other', salt: salt2, hash: hash2 } }));

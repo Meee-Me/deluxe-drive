@@ -7,8 +7,10 @@
 //   - file contents live in the same database in 1 MB pieces, or in R2 when a
 //     bucket is bound as FILES.
 //
-// Deluxe Docs connects with a link id: a short code the signed-in drive makes,
-// good for 60 seconds and for one use, that Docs trades for a read-only key.
+// Deluxe Docs and Deluxe Convert connect with a link id: a short code the
+// signed-in drive makes for one of them, good for 60 seconds and for one use.
+// Docs trades it for a read-only key; Convert for a key that can only add
+// converted files to the drive (POST /api/import).
 //
 // Nothing in here touches Node APIs. It takes a SQL handle and an env, so the
 // same code runs in the Durable Object and in the local tests.
@@ -21,6 +23,15 @@ const SETTINGS_KEY = /^[A-Za-z0-9_.-]{1,60}$/;
 const SESSION_TTL_SECONDS = 12 * 60 * 60;
 const LINK_TTL_SECONDS = 60;
 const DOCS_SESSION_SECONDS = 30 * 24 * 60 * 60;
+const APP_SESSION_SECONDS = 30 * 24 * 60 * 60;
+// The other Deluxe sites that can connect with a link id, and what their key
+// may do. Docs reads; Convert only adds files.
+const LINK_APPS = {
+  'deluxe-docs': { name: 'Deluxe Docs', scope: 'drive.read' },
+  'deluxe-convert': { name: 'Deluxe Convert', scope: 'drive.import' },
+};
+const DEFAULT_LINK_APP = 'deluxe-docs';
+const IMPORT_FOLDER = 'Deluxe Convert';
 const LINK_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
 
@@ -43,7 +54,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS sessions (
      token TEXT PRIMARY KEY, user_id TEXT NOT NULL, client_id TEXT, scope TEXT, created_at INTEGER, expires_at INTEGER)`,
   `CREATE TABLE IF NOT EXISTS link_codes (
-     code_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL, expires_at INTEGER NOT NULL)`,
+     code_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL, expires_at INTEGER NOT NULL, client TEXT)`,
   `CREATE TABLE IF NOT EXISTS chunks (key TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (key, idx))`,
 ];
 
@@ -303,6 +314,12 @@ export class HubCore {
     this.failures = new Map();
     this.store = null;
     for (const statement of SCHEMA) this.sql.exec(statement);
+    // Databases made before Deluxe Convert could connect have no client column.
+    try {
+      this.sql.exec(`ALTER TABLE link_codes ADD COLUMN client TEXT`);
+    } catch (error) {
+      /* already there */
+    }
     this.store = this.env.FILES ? new R2Store(this.env.FILES) : new SqlStore(this.sql);
     this.routes = [];
     this.defineRoutes();
@@ -601,6 +618,104 @@ export class HubCore {
     return new Response(object.body, { status, headers });
   }
 
+  /* ---------------- files added by Deluxe Convert ---------------- */
+
+  static cleanFileName(value) {
+    const clean = String(value || '')
+      .replace(/[\u0000-\u001f\u007f/\\]/g, '_')
+      .trim()
+      .slice(0, 200);
+    return clean && clean !== '.' && clean !== '..' ? clean : 'Converted file';
+  }
+
+  static cleanMime(value) {
+    const mime = String(value || '').split(';')[0].trim().toLowerCase();
+    return /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(mime) ? mime : 'application/octet-stream';
+  }
+
+  static newNodeId() {
+    return `n_${Date.now().toString(36)}_${randomToken(4)}`;
+  }
+
+  // A name not yet used among the folder's (not trashed) items: "a.pdf",
+  // then "a (1).pdf", "a (2).pdf", ...
+  uniqueChildName(accountId, parentId, name) {
+    const taken = new Set(
+      this.listNodes(accountId)
+        .filter((node) => !node.trashed && (node.parentId || null) === parentId)
+        .map((node) => String(node.name || '').toLowerCase())
+    );
+    if (!taken.has(name.toLowerCase())) return name;
+    const dot = name.lastIndexOf('.');
+    const stem = dot > 0 ? name.slice(0, dot) : name;
+    const tail = dot > 0 ? name.slice(dot) : '';
+    for (let index = 1; index < 10000; index += 1) {
+      const candidate = `${stem} (${index})${tail}`;
+      if (!taken.has(candidate.toLowerCase())) return candidate;
+    }
+    return `${stem} (${Date.now()})${tail}`;
+  }
+
+  importFolder(accountId) {
+    const existing = this.listNodes(accountId).find(
+      (node) =>
+        node.type === 'folder' &&
+        !node.trashed &&
+        !node.parentId &&
+        String(node.name || '').toLowerCase() === IMPORT_FOLDER.toLowerCase()
+    );
+    if (existing) return existing.id;
+    const now = Date.now();
+    const folder = {
+      id: HubCore.newNodeId(),
+      ownerId: accountId,
+      parentId: null,
+      type: 'folder',
+      name: this.uniqueChildName(accountId, null, IMPORT_FOLDER),
+      mime: '',
+      size: 0,
+      starred: false,
+      trashed: false,
+      trashedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.putNode(accountId, folder);
+    return folder.id;
+  }
+
+  async importFile(accountId, name, mime, request) {
+    const id = HubCore.newNodeId();
+    const size = await this.saveBlob(accountId, id, request, mime);
+    if (!size) {
+      await this.deleteBlob(accountId, id);
+      throw requestError('That file is empty.', 400);
+    }
+    if (size > this.maxUpload) {
+      await this.deleteBlob(accountId, id);
+      throw requestError('That file is too large for Deluxe Drive.', 413);
+    }
+    const parentId = this.importFolder(accountId);
+    const now = Date.now();
+    const node = {
+      id,
+      ownerId: accountId,
+      parentId,
+      type: 'file',
+      name: this.uniqueChildName(accountId, parentId, name),
+      mime,
+      size,
+      starred: false,
+      trashed: false,
+      trashedAt: null,
+      createdAt: now,
+      updatedAt: now,
+      source: 'deluxe-convert',
+    };
+    this.putNode(accountId, node);
+    return node;
+  }
+
   /* ---------------- share links ---------------- */
 
   ensureShare(accountId, blobId, name) {
@@ -647,33 +762,50 @@ export class HubCore {
     return toHex(await crypto.subtle.digest('SHA-256', encoder.encode(`deluxe-link:${clean}`)));
   }
 
+  static linkApp(value) {
+    const app = String(value || DEFAULT_LINK_APP).toLowerCase();
+    return Object.prototype.hasOwnProperty.call(LINK_APPS, app) ? app : null;
+  }
+
   // A new id each time, letters and digits only (no 0, O, 1 or I to misread),
-  // 12 characters. Making one ends any earlier id of the same account.
-  async createLinkId(accountId) {
+  // 12 characters, made for one app. Making one ends any earlier id of the same
+  // account for that app.
+  async createLinkId(accountId, app = DEFAULT_LINK_APP) {
     const bytes = crypto.getRandomValues(new Uint8Array(12));
     let raw = '';
     for (const byte of bytes) raw += LINK_ALPHABET[byte % LINK_ALPHABET.length];
     const now = Date.now();
-    this.run(`DELETE FROM link_codes WHERE account_id = ? OR expires_at <= ?`, accountId, now);
+    this.run(`DELETE FROM link_codes WHERE expires_at <= ?`, now);
     this.run(
-      `INSERT INTO link_codes (code_hash, account_id, expires_at) VALUES (?, ?, ?)`,
+      `DELETE FROM link_codes WHERE account_id = ? AND COALESCE(client, ?) = ?`,
+      accountId,
+      DEFAULT_LINK_APP,
+      app
+    );
+    this.run(
+      `INSERT INTO link_codes (code_hash, account_id, expires_at, client) VALUES (?, ?, ?, ?)`,
       await this.hashLinkId(raw),
       accountId,
-      now + LINK_TTL_SECONDS * 1000
+      now + LINK_TTL_SECONDS * 1000,
+      app
     );
-    return { linkId: HubCore.formatLinkId(raw), expiresIn: LINK_TTL_SECONDS };
+    return { linkId: HubCore.formatLinkId(raw), expiresIn: LINK_TTL_SECONDS, app };
   }
 
-  // Finds the account a link id belongs to and uses the id up.
-  async takeLinkId(value) {
+  // Finds the account a link id belongs to and uses the id up. An id made for
+  // another app is left alone and reported, so it can still be used there.
+  async takeLinkId(value, app = DEFAULT_LINK_APP) {
     const clean = HubCore.cleanLinkId(value);
     if (clean.length !== 12) return null;
     const hash = await this.hashLinkId(clean);
-    const row = this.one(`SELECT account_id, expires_at FROM link_codes WHERE code_hash = ?`, hash);
+    const row = this.one(`SELECT account_id, expires_at, client FROM link_codes WHERE code_hash = ?`, hash);
     if (!row) return null;
+    const madeFor = row.client || DEFAULT_LINK_APP;
+    if (madeFor !== app && row.expires_at > Date.now()) return { wrongApp: madeFor };
     this.run(`DELETE FROM link_codes WHERE code_hash = ?`, hash);
     if (row.expires_at <= Date.now()) return null;
-    return this.accountById(row.account_id);
+    const account = this.accountById(row.account_id);
+    return account ? { account } : null;
   }
 
   /* ---------------- sessions ---------------- */
@@ -741,6 +873,19 @@ export class HubCore {
     const session = token ? this.sessionFor(token) : null;
     if (!session) return [null, json(401, { error: 'Sign in to Deluxe Drive again.', code: 'unauthorized' })];
 
+    // The key Deluxe Convert gets for a link id may add files and say whose
+    // drive it is, and nothing else: it cannot list, read or change files.
+    if (session.clientId === 'deluxe-convert') {
+      const path = new URL(request.url).pathname;
+      const allowed =
+        (request.method === 'POST' && path === '/api/import') ||
+        (request.method === 'GET' && path === '/api/auth/me');
+      if (!allowed) {
+        return [null, json(403, { error: 'Deluxe Convert can only add files to this drive.', code: 'import-only' })];
+      }
+      return [session, null];
+    }
+
     // The key Deluxe Docs gets for a link id may read the file list and the
     // files, and nothing else.
     if (session.clientId) {
@@ -769,7 +914,8 @@ export class HubCore {
         storage: 'server',
         files: this.store.name,
         version: 'worker 2',
-        linkIds: { create: '/api/link', redeem: '/api/link/redeem', seconds: LINK_TTL_SECONDS },
+        linkIds: { create: '/api/link', redeem: '/api/link/redeem', seconds: LINK_TTL_SECONDS, apps: Object.keys(LINK_APPS) },
+        import: '/api/import',
         limits: { uploadBytes: this.maxUpload },
       })
     );
@@ -1018,36 +1164,77 @@ export class HubCore {
       const [session, denied] = this.need(request);
       if (denied) return denied;
       if (session.clientId) return json(403, { error: 'Make a link id from Deluxe Drive itself.' });
-      return json(201, await this.createLinkId(session.userId));
+      const body = await readJsonBody(request);
+      const app = HubCore.linkApp(body.app);
+      if (!app) return json(400, { error: 'That app cannot connect to Deluxe Drive.', code: 'unknown-app' });
+      return json(201, await this.createLinkId(session.userId, app));
     });
 
-    // Deluxe Docs sends the pasted id here. The account is found from the id
-    // alone; what comes back is a key that can only read.
+    // Deluxe Docs (no app, or app "deluxe-docs") and Deluxe Convert (app
+    // "deluxe-convert") send the pasted id here. The account is found from the
+    // id alone; Docs gets a key that can only read, Convert one that can only
+    // add files.
     r('POST', '/api/link/redeem', async ({ request }) => {
       const who = `redeem:${request.headers.get('cf-connecting-ip') || 'unknown'}`;
       if (this.tooManyFailures(who)) {
         return json(429, { error: 'Too many wrong link ids. Wait a few minutes and try again.', code: 'rate-limited' });
       }
       const body = await readJsonBody(request);
-      const account = await this.takeLinkId(body.linkId);
-      if (!account) {
+      const app = HubCore.linkApp(body.app);
+      if (!app) return json(400, { error: 'That app cannot connect to Deluxe Drive.', code: 'unknown-app' });
+      const found = await this.takeLinkId(body.linkId, app);
+      if (found && found.wrongApp) {
+        const appName = LINK_APPS[found.wrongApp].name;
+        return json(409, {
+          error: `This link ID was made for ${appName}. In Deluxe Drive, use Connect ${LINK_APPS[app].name} instead.`,
+          code: 'link-wrong-app',
+        });
+      }
+      if (!found) {
         this.noteFailure(who);
         return json(404, {
           error: 'This code has already been used or is too old. In Deluxe Drive, tap Generate link ID again.',
           code: 'link-not-found',
         });
       }
+      const { account } = found;
       const session = this.createSession(account.id, {
-        clientId: 'deluxe-docs',
-        scope: 'drive.read',
-        ttlSeconds: DOCS_SESSION_SECONDS,
+        clientId: app,
+        scope: LINK_APPS[app].scope,
+        ttlSeconds: app === 'deluxe-docs' ? DOCS_SESSION_SECONDS : APP_SESSION_SECONDS,
       });
       return json(200, {
         token: session.token,
         expiresIn: session.expiresIn,
+        scope: LINK_APPS[app].scope,
         user: { id: account.id, name: account.name },
         driveName: SERVER_NAME,
       });
+    });
+
+    // Deluxe Convert sends a converted file here: the body is the file, its
+    // name is in X-Deluxe-Name (URI-encoded) and its type in Content-Type. It
+    // lands in a "Deluxe Convert" folder at the top of the drive. ?share=1
+    // also makes a share link for it.
+    r('POST', '/api/import', async ({ request, url }) => {
+      const [session, denied] = this.need(request);
+      if (denied) return denied;
+      const declared = Number(request.headers.get('content-length') || 0);
+      if (declared > this.maxUpload) return json(413, { error: 'That file is too large for Deluxe Drive.' });
+      if (!this.accountById(session.userId)) return json(401, { error: 'Sign in to Deluxe Drive again.', code: 'unauthorized' });
+      const name = HubCore.cleanFileName(decodeSegment(String(request.headers.get('x-deluxe-name') || '')));
+      const mime = HubCore.cleanMime(request.headers.get('x-deluxe-mime') || request.headers.get('content-type'));
+      try {
+        const node = await this.importFile(session.userId, name, mime, request);
+        const result = { ok: true, file: { id: node.id, name: node.name, size: node.size, mime: node.mime }, folder: IMPORT_FOLDER };
+        if (url.searchParams.get('share') === '1') {
+          const token = this.ensureShare(session.userId, node.id, node.name);
+          result.share = { token, url: `${origin(url)}/s/${token}` };
+        }
+        return json(201, result);
+      } catch (error) {
+        return json(error.status || 400, { error: error.status ? error.message : 'That file could not be added.' });
+      }
     });
 
     // Disconnecting Deluxe Docs ends its key.

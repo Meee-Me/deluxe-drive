@@ -14,6 +14,8 @@ import { db as localDb } from './db.js';
 const DOCS_KEY = 'dd.docs';
 // Where Deluxe Docs lives. A link id made here is pasted there.
 export const DOCS_URL = 'https://deluxe-docs-iota.vercel.app';
+// Where Deluxe Convert lives. Its link id lets it add converted files here.
+export const CONVERT_URL = 'https://deluxe-convert-cloud.deluxelordd.workers.dev';
 // The drive's server runs on Cloudflare. Copies of the page hosted on Vercel
 // use it, so accounts and files are the same wherever the drive is opened.
 const DEFAULT_SERVER = 'https://deluxe-drive.deluxelordd.workers.dev';
@@ -430,16 +432,23 @@ export function docsReady() {
   return !!docsSettings().url && isOnline();
 }
 
-// A link id for Deluxe Docs: 12 letters and digits, new every time, good for
-// 60 seconds and one use. Deluxe Docs trades it for a key that can only read
-// this account's files. Making one also turns on opening documents in Docs.
-export async function generateLinkId() {
+// A link id: 12 letters and digits, new every time, good for 60 seconds and
+// one use, made for one app. Deluxe Docs trades it for a key that can only read
+// this account's files (making one also turns on opening documents in Docs);
+// Deluxe Convert for a key that can only add converted files.
+export async function generateLinkId(app = 'deluxe-docs') {
   if (!isOnline()) {
     throw new Error('Link IDs need the Deluxe Drive server. Open the drive at its workers.dev address.');
   }
-  const data = await requestJson('/api/link', { method: 'POST' });
-  const settings = docsSettings();
-  if (!settings.url) saveDocsSettings({ ...settings, url: DOCS_URL });
+  const data = await requestJson('/api/link', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ app }),
+  });
+  if (app === 'deluxe-docs') {
+    const settings = docsSettings();
+    if (!settings.url) saveDocsSettings({ ...settings, url: DOCS_URL });
+  }
   return { linkId: String(data.linkId || ''), expiresIn: Number(data.expiresIn) || 60 };
 }
 

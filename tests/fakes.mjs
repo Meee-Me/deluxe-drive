@@ -44,7 +44,7 @@ export class FakeBlobSdk {
   constructor() {
     this.m = new Map();
     this.n = 0;
-    this.ops = { put: 0, get: 0, del: 0 };
+    this.ops = { put: 0, get: 0, del: 0, head: 0 };
     const sdk = this;
     this.BlobPreconditionFailedError = class extends Error { constructor() { super('Vercel Blob: Precondition failed: ETag mismatch.'); } };
     this.BlobNotFoundError = class extends Error { constructor() { super('Vercel Blob: The requested blob does not exist'); } };
@@ -59,7 +59,7 @@ export class FakeBlobSdk {
       if (typeof body === 'string') bytes = Buffer.from(body);
       else if (body && typeof body.getReader === 'function') bytes = Buffer.from(await new Response(body).arrayBuffer());
       else bytes = Buffer.from(body);
-      const etag = `"e${++sdk.n}"`;
+      const etag = `e${++sdk.n}`; // the API's form (put / head)
       sdk.m.set(path, { bytes, etag, contentType: o.contentType });
       return { pathname: path, url: `https://fake.blob/${path}`, etag };
     };
@@ -67,12 +67,21 @@ export class FakeBlobSdk {
       sdk.ops.get++;
       const e = sdk.m.get(pathname);
       if (!e) return null;
-      if (o.ifNoneMatch && o.ifNoneMatch === e.etag) return { statusCode: 304, stream: null, blob: { etag: e.etag, pathname } };
+      // The real get() reports the ETag response header, which is not the
+      // API's form that ifMatch takes: model that difference here.
+      const header = `W/"${e.etag}"`;
+      if (o.ifNoneMatch && o.ifNoneMatch === header) return { statusCode: 304, stream: null, blob: { etag: header, pathname } };
       let b = e.bytes;
       const range = o.headers && (o.headers.Range || o.headers.range);
       const m = range && /bytes=(\d+)-(\d+)/.exec(range);
       if (m) b = b.subarray(Number(m[1]), Number(m[2]) + 1);
-      return { statusCode: 200, stream: new Response(b).body, blob: { etag: e.etag, pathname, size: b.length } };
+      return { statusCode: 200, stream: new Response(b).body, blob: { etag: header, pathname, size: b.length } };
+    };
+    this.head = async (pathname) => {
+      sdk.ops.head++;
+      const e = sdk.m.get(pathname);
+      if (!e) throw new sdk.BlobNotFoundError();
+      return { pathname, etag: e.etag, size: e.bytes.length, contentType: e.contentType };
     };
     this.del = async (paths) => { sdk.ops.del++; for (const p of [].concat(paths)) sdk.m.delete(p); };
   }

@@ -66,6 +66,31 @@ assert.equal((await call(A, 'PUT', '/api/db/nodes/f_5', { token: acct.token, bod
 assert.ok((await j(await call(make(), 'GET', '/api/db/nodes', { token: acct.token }))).nodes.some((x) => x.name === 'e.txt'));
 ok('a clashing write is refused (503, try again) instead of overwriting');
 
+// a real clash is retried on the server once, on fresh state, and succeeds
+{
+  const real = A.state.sync.bind(A.state);
+  let skipped = false;
+  A.state.sync = async (o) => { if (!skipped) { skipped = true; return false; } return real(o); };
+  await call(B, 'PUT', '/api/db/nodes/f_6', { token: acct.token, body: { id: 'f_6', type: 'file', name: 'f.txt', ownerId: acct.user.id } });
+  const res = await call(A, 'PUT', '/api/db/nodes/f_7', { token: acct.token, body: { id: 'f_7', type: 'file', name: 'g.txt', ownerId: acct.user.id } });
+  A.state.sync = real;
+  assert.equal(res.status, 200);
+  const all = (await j(await call(make(), 'GET', '/api/db/nodes', { token: acct.token }))).nodes.map((x) => x.name);
+  assert.ok(all.includes('f.txt') && all.includes('g.txt'));
+  ok('a clash is retried on fresh state and both changes are kept');
+}
+
+// a cold start that writes first (the live failure): sign in on a new instance
+{
+  const fresh = make();
+  const r = await call(fresh, 'POST', '/api/auth/session', { body: { userId: acct.user.id, hash } });
+  assert.equal(r.status, 200);
+  const fresh2 = make();
+  const r2 = await call(fresh2, 'POST', '/api/accounts', { body: { name: 'Second', salt, hash } });
+  assert.equal(r2.status, 201);
+  ok('a new instance can write straight away (sign in, create account)');
+}
+
 // reads do not write: listing files costs no Blob writes
 const before = sdk.ops.put;
 for (let i = 0; i < 5; i++) await call(C, 'GET', '/api/db/nodes', { token: acct.token });

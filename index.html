@@ -50,7 +50,7 @@
         <span aria-hidden="true">·</span>
         <button id="auth-credits" class="link-inline" type="button">credits</button>
         <span aria-hidden="true">·</span>
-        <button id="auth-more-sites" class="link-inline" type="button">more websites</button>
+        <button id="auth-more-sites" class="link-inline" type="button">Deluxe apps</button>
       </p>
     </form>
   </div>
@@ -69,9 +69,9 @@
         <svg class="ico search-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z" /></svg>
         <input id="search-input" type="search" placeholder="Search in Deluxe Drive" aria-label="Search files" autocomplete="off" />
       </div>
-      <button id="more-sites-btn" class="btn ghost more-sites-btn" type="button" aria-label="More websites" title="More websites">
+      <button id="more-sites-btn" class="btn ghost more-sites-btn" type="button" aria-label="Deluxe apps" title="Deluxe apps" aria-haspopup="dialog">
         <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 8h4V4H4v4zm6 12h4v-4h-4v4zm-6 0h4v-4H4v4zm0-6h4v-4H4v4zm6 0h4v-4h-4v4zm6-10v4h4V4h-4zm-6 4h4V4h-4v4zm6 6h4v-4h-4v4zm0 6h4v-4h-4v4z" /></svg>
-        <span>More websites</span>
+        <span>Apps</span>
       </button>
       <button id="theme-btn" class="icon-btn" type="button" aria-label="Toggle theme"></button>
       <button id="account-btn" class="avatar" type="button" aria-label="Account menu">D</button>
@@ -296,6 +296,7 @@
   </script>
 
   <!-- The ?v= query busts a stale cached copy of the module between deploys. -->
-  <script type="module" src="js/app.js?v=33"></script>
+  <script src="deluxe-apps.js?v=1" defer></script>
+  <script type="module" src="js/app.js?v=35"></script>
 </body>
 </html>

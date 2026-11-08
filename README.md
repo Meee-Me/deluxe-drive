@@ -43,8 +43,9 @@ shared — and it can hand a document to **Deluxe Docs**.
   link ID**, then **Open Deluxe Convert**. From then on, every converted file in Deluxe Convert has
   **Share to Deluxe Drive**, which adds it to a **Deluxe Convert** folder here (and can make a share
   link for it). Convert's key can only add files. Coming back to the drive's tab shows new files.
-- **More websites** — a button in the top bar (and a link on the lock screen) opens a list of the
-  other Deluxe Lord sites: YouTube Guider AI, Deluxe Convert, Deluxe Translate and Deluxe Docs.
+- **Deluxe apps** — the **Apps** button in the top bar (and **Deluxe apps** on the lock screen) opens the
+  app switcher shared by every Deluxe site (`deluxe-apps.js`): Drive, Docs, Convert, Translate and YouTube
+  Guider AI, each with its icon.
 - **Select mode** — select several items and download, star, move or delete them together, plus
   a details panel and next/previous navigation inside the preview.
 - **Grid and list layouts**, sorting by name / last modified / size, storage usage meter, light and

@@ -113,31 +113,47 @@ export class BlobState {
   // Reads the state blob again if it changed since this instance loaded it.
   // Returns true when the database was replaced (the hub must make its tables
   // again if the blob was empty).
+  // The state blob's ETag as the Blob API gives it (head / put), or null
+  // when there is none. get() reports the HTTP header form instead, which
+  // ifMatch does not accept, so versions are always taken from head().
+  async headEtag() {
+    try {
+      const info = await this.sdk.head(STATE_PATH);
+      return info && info.etag ? info.etag : null;
+    } catch (error) {
+      if (isNotFound(error, this.sdk)) return null;
+      throw error;
+    }
+  }
+
   async sync({ force = false, mutating = false } = {}) {
     const now = Date.now();
     if (!force && !mutating && now - this.checkedAt < READ_FRESH_MS) return false;
-    const result = await this.sdk.get(STATE_PATH, {
-      access: 'private',
-      useCache: false,
-      ...(this.etag && !force ? { ifNoneMatch: this.etag } : {}),
-    });
-    this.checkedAt = Date.now();
-    if (!result) {
-      // Nothing stored yet (a new drive), or it was removed.
-      if (this.etag) {
-        this.reset();
-        this.etag = null;
-        this.dirty = false;
-        return true;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const before = await this.headEtag();
+      this.checkedAt = Date.now();
+      if (!before) {
+        // Nothing stored yet (a new drive), or it was removed.
+        if (this.etag) {
+          this.reset();
+          this.etag = null;
+          this.dirty = false;
+          return true;
+        }
+        return false;
       }
-      return false;
+      if (!force && before === this.etag) return false;
+      const result = await this.sdk.get(STATE_PATH, { access: 'private', useCache: false });
+      if (!result || !result.stream) continue;
+      const text = (await readAll(result.stream)).toString('utf8');
+      // Only keep it if nobody wrote while it was being read.
+      if ((await this.headEtag()) !== before) continue;
+      this.restore(text);
+      this.etag = before;
+      this.dirty = false;
+      return true;
     }
-    if (result.statusCode === 304) return false;
-    const text = (await readAll(result.stream)).toString('utf8');
-    this.restore(text);
-    this.etag = result.blob.etag;
-    this.dirty = false;
-    return true;
+    throw new Error('The drive kept changing while it was being read.');
   }
 
   // Writes the database back if a request changed it. ifMatch makes this fail
@@ -315,8 +331,18 @@ export class BlobBackend {
     return turn;
   }
 
-  handle(request) {
+  // A write that clashes with one from another instance is run once more on
+  // the fresh state before "try again" is ever shown.
+  async handle(request) {
     const mutating = !['GET', 'HEAD'].includes(request.method);
+    if (!mutating) return this.handleOnce(request, false);
+    const spare = request.clone();
+    const first = await this.handleOnce(request, true);
+    if (first.status !== 503 || first.headers.get('x-deluxe-clash') !== '1') return first;
+    return this.handleOnce(spare, true);
+  }
+
+  handleOnce(request, mutating) {
     return this.run(async () => {
       if (await this.state.sync({ mutating })) this.reloaded();
       this.state.dirty = false;
@@ -343,7 +369,15 @@ export class BlobBackend {
               : 'Deluxe Drive could not save that. Try again in a moment.',
             code: 'retry',
           }),
-          { status: 503, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Retry-After': '1' } }
+          {
+            status: 503,
+            headers: {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Cache-Control': 'no-store',
+              'Retry-After': '1',
+              ...(isPreconditionFailure(error, this.state.sdk) ? { 'x-deluxe-clash': '1' } : {}),
+            },
+          }
         );
       }
       return response;

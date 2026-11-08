@@ -8,7 +8,7 @@ import { mountPdf, mountScaled, closeViewer } from './viewer.js';
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 31';
+const BUILD = 'build 32';
 
 // The drive keeps its files in this browser's IndexedDB, or - when the page is
 // served by the Deluxe Drive server - on that server, under the signed-in
@@ -1782,7 +1782,13 @@ const CREDITS_SITES = [
 
 // "More websites": the button in the top bar (and the link on the lock
 // screen) opens the other sites by Deluxe Lord.
-function showMoreSites() {
+function showMoreSites(event) {
+  // The Deluxe apps switcher (deluxe-apps.js), shared by every Deluxe site.
+  if (window.DeluxeApps) {
+    const anchor = event && event.currentTarget instanceof Element ? event.currentTarget : null;
+    window.DeluxeApps.open(anchor, { current: 'drive' });
+    return;
+  }
   const root = $('#dialog');
   if (!root) return;
 

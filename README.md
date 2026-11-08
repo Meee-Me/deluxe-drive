@@ -44,7 +44,7 @@ shared — and it can hand a document to **Deluxe Docs**.
   **Share to Deluxe Drive**, which adds it to a **Deluxe Convert** folder here (and can make a share
   link for it). Convert's key can only add files. Coming back to the drive's tab shows new files.
 - **More websites** — a button in the top bar (and a link on the lock screen) opens a list of the
-  other Deluxe Lord sites: YouTube Guider AI, Deluxe Convert and Deluxe Translate.
+  other Deluxe Lord sites: YouTube Guider AI, Deluxe Convert, Deluxe Translate and Deluxe Docs.
 - **Select mode** — select several items and download, star, move or delete them together, plus
   a details panel and next/previous navigation inside the preview.
 - **Grid and list layouts**, sorting by name / last modified / size, storage usage meter, light and
@@ -206,7 +206,7 @@ Cloudflare Worker in `worker/` is the one with link IDs, and it is what the driv
 ## Credits
 
 Directed by **Shivad Sujith**. AI support: **Claude**. Built with **FreeMilk**. Powered by
-**Netlify**. Other sites by Deluxe Lord — [YouTube Guider AI](https://youtube-guide-ai.netlify.app/),
+**Netlify**. Other sites by Deluxe Lord — [YouTube Guider AI](https://deluxe-youtube-guider.vercel.app/),
 [Deluxe Convert](https://deluxe-convert.vercel.app),
-[Deluxe Translate](https://deluxe-translate-8m27.netlify.app/). The same list is in the app: the
+[Deluxe Translate](https://deluxe-translate-app.vercel.app/). The same list is in the app: the
 **credits** link on the lock screen, or **Credits** in the account menu.

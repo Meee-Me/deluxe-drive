@@ -1839,10 +1839,12 @@ function showDocsDialog() {
       <h2>Connect Deluxe Docs</h2>
       <p class="dialog-msg">${
         online
-          ? 'Generate a link ID, then paste it into Deluxe Docs within 60 seconds.'
-          : 'Link IDs need the Deluxe Drive server. Open the drive at its workers.dev address and try again.'
+          ? 'Tap <b>Generate link ID</b>, then <b>Open Deluxe Docs</b>. Your files open there, nothing to copy.'
+          : 'This needs the Deluxe Drive server. Open the drive at its workers.dev address and try again.'
       }</p>
       <div class="link-id" id="link-id" hidden>
+        <a class="btn primary link-id-open" id="link-id-open" href="#" target="_blank" rel="noopener noreferrer">Open Deluxe Docs</a>
+        <p class="link-id-other">On another phone or computer? Open Deluxe Docs there and type:</p>
         <button class="link-id-code" id="link-id-code" type="button" aria-label="Copy link ID"></button>
         <p class="link-id-note" id="link-id-note" aria-live="polite"></p>
       </div>
@@ -1856,6 +1858,7 @@ function showDocsDialog() {
   const codeButton = root.querySelector('#link-id-code');
   const note = root.querySelector('#link-id-note');
   const make = root.querySelector('#link-id-make');
+  const openDocs = root.querySelector('#link-id-open');
   let timer = null;
   let left = 0;
   let copied = false;
@@ -1875,7 +1878,7 @@ function showDocsDialog() {
   root.querySelector('[data-close]').addEventListener('click', close);
 
   const showNote = () => {
-    note.textContent = `${copied ? 'Copied. ' : 'Tap to copy. '}Works once, for ${left}s.`;
+    note.textContent = `${copied ? 'Copied. ' : 'Tap the code to copy it. '}Works once, for ${left} more seconds.`;
   };
 
   const generate = async (copyIt) => {
@@ -1884,7 +1887,12 @@ function showDocsDialog() {
       const { linkId, expiresIn } = await cloud.generateLinkId();
       if (closed) return;
       codeButton.textContent = linkId;
+      // The code rides after # so it never reaches a server log.
+      openDocs.href = `${cloud.DOCS_URL}/#link=${encodeURIComponent(linkId)}`;
       box.hidden = false;
+      make.textContent = 'Make a new code';
+      make.classList.remove('primary');
+      make.classList.add('ghost');
       left = expiresIn;
       copied = false;
       if (copyIt) {
@@ -1901,7 +1909,7 @@ function showDocsDialog() {
         left -= 1;
         if (left <= 0) {
           clearInterval(timer);
-          note.textContent = 'That one ran out. Making a new one…';
+          note.textContent = 'That code ran out. Making a new one…';
           generate(false);
           return;
         }
@@ -1915,6 +1923,8 @@ function showDocsDialog() {
   };
 
   make.addEventListener('click', () => generate(true));
+  // Once Docs opens, the code is used up; close this so it is not reused.
+  openDocs.addEventListener('click', () => setTimeout(close, 300));
   codeButton.addEventListener('click', async () => {
     copied = await copyText(codeButton.textContent);
     showNote();

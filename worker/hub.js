@@ -1033,7 +1033,7 @@ export class HubCore {
       if (!account) {
         this.noteFailure(who);
         return json(404, {
-          error: 'That link id is not right or has run out. Make a new one in Deluxe Drive and paste it within 60 seconds.',
+          error: 'This code has already been used or is too old. In Deluxe Drive, tap Generate link ID again.',
           code: 'link-not-found',
         });
       }

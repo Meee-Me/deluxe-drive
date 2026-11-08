@@ -1,0 +1,28 @@
+# Copies every push on main to the GitLab copy of this repository, which is the
+# one Vercel deploys from. Needs a GITLAB_TOKEN secret (a GitLab personal access
+# token with the write_repository scope). The GitLab path can be changed with a
+# GITLAB_REPO variable; it defaults to Deluxelord/deluxe-drive.
+name: Copy to GitLab
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Push to GitLab
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITLAB_REPO: ${{ vars.GITLAB_REPO || 'Deluxelord/deluxe-drive' }}
+        run: |
+          if [ -z "$GITLAB_TOKEN" ]; then
+            echo "::error::Add a GITLAB_TOKEN secret in Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          git push "https://oauth2:${GITLAB_TOKEN}@gitlab.com/${GITLAB_REPO}.git" HEAD:refs/heads/main

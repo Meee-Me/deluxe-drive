@@ -9,3 +9,5 @@ README.md
 .git
 .gitignore
 node_modules
+.github/
+vercel.json

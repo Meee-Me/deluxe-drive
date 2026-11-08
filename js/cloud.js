@@ -13,7 +13,10 @@ import { db as localDb } from './db.js';
 
 const DOCS_KEY = 'dd.docs';
 // Where Deluxe Docs lives. A link id made here is pasted there.
-export const DOCS_URL = 'https://deluxe-docs.deluxelordd.workers.dev';
+export const DOCS_URL = 'https://deluxe-docs-iota.vercel.app';
+// The drive's server runs on Cloudflare. Copies of the page hosted on Vercel
+// use it, so accounts and files are the same wherever the drive is opened.
+const DEFAULT_SERVER = 'https://deluxe-drive.deluxelordd.workers.dev';
 const DOCS_DEFAULTS = { url: '', autoOpen: true };
 const SERVER_KEY = 'dd.server';
 
@@ -105,6 +108,7 @@ async function probe() {
   const bases = [''];
   const saved = savedServer();
   if (saved && saved !== location.origin) bases.push(saved);
+  if (/\.vercel\.app$/i.test(location.hostname) && !bases.includes(DEFAULT_SERVER)) bases.push(DEFAULT_SERVER);
 
   for (const base of bases) {
     const found = await probeAt(base);

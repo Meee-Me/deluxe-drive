@@ -1,26 +1,28 @@
 // The Deluxe Drive server, for Cloudflare Workers.
 //
-// This is the same API the Node server in server/ offers, so the drive's
-// own pages (js/cloud.js) and Deluxe Docs work against it unchanged:
-//   - accounts, nodes and settings, shares, link ids and sessions live in the
-//     Durable Object's SQLite database (one object, so writes never race),
-//   - file contents live in R2 under b/<account>/<file id>.
+// The drive's own pages (js/cloud.js) talk to this, and so does Deluxe Docs:
+//   - accounts, file records and settings, share links, link ids and sessions
+//     live in the Durable Object's SQLite database (one object, so writes
+//     never race),
+//   - file contents live in the same database in 1 MB pieces, or in R2 when a
+//     bucket is bound as FILES.
+//
+// Deluxe Docs connects with a link id: a short code the signed-in drive makes,
+// good for 60 seconds and for one use, that Docs trades for a read-only key.
 //
 // Nothing in here touches Node APIs. It takes a SQL handle and an env, so the
 // same code runs in the Durable Object and in the local tests.
 
-import { escapeHtml, normalizeRedirect, errorPage, loginPage, consentPage } from './pages.js';
 
 const SERVER_NAME = 'Deluxe Drive';
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,120}$/;
 const HEX_PATTERN = /^[0-9a-fA-F]{16,128}$/;
 const SETTINGS_KEY = /^[A-Za-z0-9_.-]{1,60}$/;
 const SESSION_TTL_SECONDS = 12 * 60 * 60;
-const CODE_TTL_MS = 10 * 60 * 1000;
-const PENDING_TTL_MS = 10 * 60 * 1000;
+const LINK_TTL_SECONDS = 60;
+const DOCS_SESSION_SECONDS = 30 * 24 * 60 * 60;
+const LINK_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
-const MAX_FORM_BYTES = 64 * 1024;
-const DEFAULT_DOCS_ORIGINS = ['https://deluxe-docs.deluxelordd.workers.dev'];
 
 const encoder = new TextEncoder();
 
@@ -38,15 +40,11 @@ const SCHEMA = [
      PRIMARY KEY (account_id, id))`,
   `CREATE TABLE IF NOT EXISTS shares (
      token TEXT PRIMARY KEY, account_id TEXT NOT NULL, blob_id TEXT NOT NULL, name TEXT, created_at INTEGER)`,
-  `CREATE TABLE IF NOT EXISTS links (
-     code TEXT PRIMARY KEY, account_id TEXT NOT NULL UNIQUE, created_at INTEGER)`,
-  `CREATE TABLE IF NOT EXISTS clients (
-     id TEXT PRIMARY KEY, name TEXT, redirect_uri TEXT NOT NULL UNIQUE, created_at INTEGER)`,
   `CREATE TABLE IF NOT EXISTS sessions (
      token TEXT PRIMARY KEY, user_id TEXT NOT NULL, client_id TEXT, scope TEXT, created_at INTEGER, expires_at INTEGER)`,
+  `CREATE TABLE IF NOT EXISTS link_codes (
+     code_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL, expires_at INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS chunks (key TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (key, idx))`,
-  `CREATE TABLE IF NOT EXISTS codes (code TEXT PRIMARY KEY, json TEXT NOT NULL, expires_at INTEGER)`,
-  `CREATE TABLE IF NOT EXISTS pending (id TEXT PRIMARY KEY, json TEXT NOT NULL, expires_at INTEGER)`,
 ];
 
 /* ------------------------------------------------------------------ */
@@ -61,13 +59,6 @@ function toHex(bytes) {
 
 function randomToken(byteLength) {
   return toHex(crypto.getRandomValues(new Uint8Array(byteLength)));
-}
-
-function toBase64Url(buffer) {
-  let text = '';
-  const bytes = new Uint8Array(buffer);
-  for (let index = 0; index < bytes.length; index += 1) text += String.fromCharCode(bytes[index]);
-  return btoa(text).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 function safeEqual(left, right) {
@@ -93,22 +84,11 @@ function json(status, value, headers = {}) {
   });
 }
 
-function html(status, text) {
-  return new Response(String(text || ''), {
-    status,
-    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
-  });
-}
-
 function text(status, message) {
   return new Response(String(message || ''), {
     status,
     headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
   });
-}
-
-function redirect(location) {
-  return new Response(null, { status: 302, headers: { Location: location, 'Cache-Control': 'no-store' } });
 }
 
 function decodeSegment(value) {
@@ -178,10 +158,6 @@ async function readJsonBody(request) {
   } catch (error) {
     throw requestError('That request could not be read.', 400);
   }
-}
-
-async function readFormBody(request) {
-  return new URLSearchParams(await readText(request, MAX_FORM_BYTES));
 }
 
 /* ------------------------------------------------------------------ */
@@ -451,7 +427,7 @@ export class HubCore {
     this.run(`DELETE FROM accounts WHERE id = ?`, id);
     for (const table of ['nodes', 'settings', 'blobs']) this.run(`DELETE FROM ${table} WHERE account_id = ?`, id);
     this.run(`DELETE FROM shares WHERE account_id = ?`, id);
-    this.run(`DELETE FROM links WHERE account_id = ?`, id);
+    this.run(`DELETE FROM link_codes WHERE account_id = ?`, id);
     this.run(`DELETE FROM sessions WHERE user_id = ?`, id);
     await this.deleteBlobPrefix(`b/${id}/`);
     return true;
@@ -655,25 +631,52 @@ export class HubCore {
     return this.all(`SELECT * FROM shares WHERE account_id = ? ORDER BY created_at DESC`, accountId);
   }
 
-  /* ---------------- the link id for Deluxe Docs ---------------- */
+  /* ---------------- link ids for Deluxe Docs ---------------- */
 
-  // One stable link per account. It holds no secret: whoever has it can only
-  // start a sign-in, and signing in needs the account's password.
-  ensureDocsLink(accountId) {
-    const existing = this.one(`SELECT code FROM links WHERE account_id = ?`, accountId);
-    if (existing) return existing.code;
-    const code = randomToken(6);
-    this.run(`INSERT INTO links (code, account_id, created_at) VALUES (?, ?, ?)`, code, accountId, Date.now());
-    return code;
+  static formatLinkId(raw) {
+    return raw.replace(/(.{4})(?=.)/g, '$1-');
   }
 
-  docsLinkByCode(code) {
-    const clean = String(code || '');
-    if (!/^[0-9a-f]{8,64}$/i.test(clean)) return null;
-    return this.one(`SELECT * FROM links WHERE code = ?`, clean);
+  static cleanLinkId(value) {
+    return String(value || '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '');
   }
 
-  /* ---------------- sessions, codes, clients ---------------- */
+  async hashLinkId(clean) {
+    return toHex(await crypto.subtle.digest('SHA-256', encoder.encode(`deluxe-link:${clean}`)));
+  }
+
+  // A new id each time, letters and digits only (no 0, O, 1 or I to misread),
+  // 12 characters. Making one ends any earlier id of the same account.
+  async createLinkId(accountId) {
+    const bytes = crypto.getRandomValues(new Uint8Array(12));
+    let raw = '';
+    for (const byte of bytes) raw += LINK_ALPHABET[byte % LINK_ALPHABET.length];
+    const now = Date.now();
+    this.run(`DELETE FROM link_codes WHERE account_id = ? OR expires_at <= ?`, accountId, now);
+    this.run(
+      `INSERT INTO link_codes (code_hash, account_id, expires_at) VALUES (?, ?, ?)`,
+      await this.hashLinkId(raw),
+      accountId,
+      now + LINK_TTL_SECONDS * 1000
+    );
+    return { linkId: HubCore.formatLinkId(raw), expiresIn: LINK_TTL_SECONDS };
+  }
+
+  // Finds the account a link id belongs to and uses the id up.
+  async takeLinkId(value) {
+    const clean = HubCore.cleanLinkId(value);
+    if (clean.length !== 12) return null;
+    const hash = await this.hashLinkId(clean);
+    const row = this.one(`SELECT account_id, expires_at FROM link_codes WHERE code_hash = ?`, hash);
+    if (!row) return null;
+    this.run(`DELETE FROM link_codes WHERE code_hash = ?`, hash);
+    if (row.expires_at <= Date.now()) return null;
+    return this.accountById(row.account_id);
+  }
+
+  /* ---------------- sessions ---------------- */
 
   createSession(userId, options = {}) {
     const ttlSeconds = Number(options.ttlSeconds) > 0 ? Number(options.ttlSeconds) : SESSION_TTL_SECONDS;
@@ -708,271 +711,6 @@ export class HubCore {
     this.run(`DELETE FROM sessions WHERE token = ?`, String(token || ''));
   }
 
-  issueCode(entry) {
-    const now = Date.now();
-    this.run(`DELETE FROM codes WHERE expires_at <= ?`, now);
-    this.run(`DELETE FROM pending WHERE expires_at <= ?`, now);
-    const code = randomToken(24);
-    this.run(`INSERT INTO codes (code, json, expires_at) VALUES (?, ?, ?)`, code, JSON.stringify(entry), now + CODE_TTL_MS);
-    return code;
-  }
-
-  codeByValue(code) {
-    const row = this.one(`SELECT json, expires_at FROM codes WHERE code = ?`, String(code || ''));
-    if (!row) return null;
-    if (row.expires_at <= Date.now()) {
-      this.dropCode(code);
-      return null;
-    }
-    return JSON.parse(row.json);
-  }
-
-  dropCode(code) {
-    this.run(`DELETE FROM codes WHERE code = ?`, String(code || ''));
-  }
-
-  createPendingLogin(entry) {
-    const id = randomToken(16);
-    this.run(`INSERT INTO pending (id, json, expires_at) VALUES (?, ?, ?)`, id, JSON.stringify(entry), Date.now() + PENDING_TTL_MS);
-    return id;
-  }
-
-  takePendingLogin(id) {
-    const clean = String(id || '');
-    const row = this.one(`SELECT json, expires_at FROM pending WHERE id = ?`, clean);
-    if (!row) return null;
-    this.run(`DELETE FROM pending WHERE id = ?`, clean);
-    return row.expires_at <= Date.now() ? null : JSON.parse(row.json);
-  }
-
-  clientById(id) {
-    const clean = String(id || '');
-    if (!clean) return null;
-    const row = this.one(`SELECT * FROM clients WHERE id = ?`, clean);
-    return row ? { id: row.id, name: row.name, redirectUri: row.redirect_uri, createdAt: row.created_at } : null;
-  }
-
-  listClients() {
-    return this.all(`SELECT * FROM clients ORDER BY created_at`).map((row) => ({
-      id: row.id,
-      name: row.name,
-      redirectUri: row.redirect_uri,
-      createdAt: row.created_at,
-    }));
-  }
-
-  registerClient({ name, redirectUri }) {
-    const cleanName = String(name || 'Deluxe Docs').trim().slice(0, 40) || 'Deluxe Docs';
-    const cleanRedirect = String(redirectUri || '');
-    const existing = this.one(`SELECT * FROM clients WHERE redirect_uri = ?`, cleanRedirect);
-    if (existing) {
-      this.run(`UPDATE clients SET name = ? WHERE id = ?`, cleanName, existing.id);
-      return this.clientById(existing.id);
-    }
-    const id = `dc_${randomToken(8)}`;
-    this.run(`INSERT INTO clients (id, name, redirect_uri, created_at) VALUES (?, ?, ?, ?)`, id, cleanName, cleanRedirect, Date.now());
-    return this.clientById(id);
-  }
-
-  removeClient(id) {
-    this.run(`DELETE FROM clients WHERE id = ?`, id);
-  }
-
-  // A connection link may register the page that is pasting it, but only if
-  // that page is one this drive's owner trusts, so a leaked link cannot be
-  // used to send a sign-in somewhere else.
-  redirectAllowed(redirect) {
-    let url;
-    try {
-      url = new URL(redirect);
-    } catch (error) {
-      return false;
-    }
-    if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') return true;
-    const listed = String(this.env.ALLOWED_DOCS_ORIGINS || '')
-      .split(/[\s,]+/)
-      .filter(Boolean);
-    const origins = (listed.length ? listed : DEFAULT_DOCS_ORIGINS).map((value) => {
-      try {
-        return new URL(value).origin;
-      } catch (error) {
-        return '';
-      }
-    });
-    return origins.includes(url.origin);
-  }
-
-  /* ---------------- OAuth ---------------- */
-
-  redirectBack(redirectUri, params) {
-    let url;
-    try {
-      url = new URL(redirectUri);
-    } catch (error) {
-      return html(400, errorPage('That return address is not valid', 'Start again from the app.'));
-    }
-    for (const [key, value] of Object.entries(params)) {
-      if (value === undefined || value === null || value === '') continue;
-      url.searchParams.set(key, String(value));
-    }
-    return redirect(url.toString());
-  }
-
-  async authorize(request, url) {
-    const query = url.searchParams;
-    const method = request.method;
-    const clientId = String(query.get('client_id') || '');
-    const redirectUri = String(query.get('redirect_uri') || '');
-    const state = String(query.get('state') || '');
-    const scope = String(query.get('scope') || 'openid profile');
-    const challenge = String(query.get('code_challenge') || '');
-    const challengeMethod = String(query.get('code_challenge_method') || 'S256').toUpperCase();
-
-    const client = this.clientById(clientId);
-    if (!client) {
-      return html(
-        400,
-        errorPage(
-          'This app is not connected',
-          'Deluxe Drive does not know this app. Connect Deluxe Docs again from the Deluxe Drive account menu.'
-        )
-      );
-    }
-
-    const registered = normalizeRedirect(client.redirectUri);
-    const asked = normalizeRedirect(redirectUri);
-    if (!registered || !asked || registered !== asked) {
-      return html(
-        400,
-        errorPage(
-          'The return address does not match',
-          `“${client.name}” asked to return to a page that is not the one connected to this drive.`
-        )
-      );
-    }
-
-    if (String(query.get('response_type') || '') !== 'code') {
-      return this.redirectBack(redirectUri, { error: 'unsupported_response_type', state });
-    }
-    if (!challenge) {
-      return this.redirectBack(redirectUri, { error: 'invalid_request', error_description: 'A code challenge is required', state });
-    }
-    if (challengeMethod !== 'S256' && challengeMethod !== 'PLAIN') {
-      return this.redirectBack(redirectUri, { error: 'invalid_request', error_description: 'Unsupported code challenge method', state });
-    }
-
-    const action = `/oauth/authorize?${query.toString()}`;
-    const hintId = String(query.get('login_hint') || '');
-    const hinted = hintId ? this.accountById(hintId) : null;
-    const hintName = hinted ? hinted.name : '';
-
-    if (method !== 'POST') {
-      return html(200, loginPage({ client, action, error: '', name: hintName }));
-    }
-
-    const body = await readFormBody(request);
-    const requestId = String(body.get('request') || '');
-
-    if (requestId) {
-      const pending = this.takePendingLogin(requestId);
-      if (!pending || pending.clientId !== clientId) {
-        return html(400, errorPage('That sign-in expired', 'Start again from Deluxe Docs to open a document.'));
-      }
-      if (String(body.get('decision') || '') !== 'approve') {
-        return this.redirectBack(redirectUri, { error: 'access_denied', state });
-      }
-      const code = this.issueCode({
-        userId: pending.userId,
-        userName: pending.userName,
-        clientId,
-        redirectUri,
-        scope,
-        challenge,
-        challengeMethod,
-      });
-      return this.redirectBack(redirectUri, { code, state });
-    }
-
-    const name = String(body.get('name') || '').trim();
-    const hash = String(body.get('hash') || '');
-    const throttleKey = `login:${name.toLowerCase()}`;
-
-    if (this.tooManyFailures(throttleKey)) {
-      return html(
-        429,
-        loginPage({ client, action, name, error: 'Too many wrong tries. Wait a few minutes and try again.' })
-      );
-    }
-
-    const account = name ? this.accountByName(name) : null;
-    if (!account || !safeEqual(account.hash, hash)) {
-      this.noteFailure(throttleKey);
-      return html(
-        401,
-        loginPage({
-          client,
-          action,
-          name: name || hintName,
-          error: 'That name and password do not match an account on this drive.',
-        })
-      );
-    }
-
-    this.clearFailures(throttleKey);
-    const pendingId = this.createPendingLogin({
-      userId: account.id,
-      userName: account.name,
-      clientId,
-      redirectUri,
-      scope,
-      state,
-      challenge,
-      challengeMethod,
-    });
-    return html(200, consentPage({ client, account, action, requestId: pendingId, scope }));
-  }
-
-  async token(request) {
-    const form = await readFormBody(request);
-    if (String(form.get('grant_type') || '') !== 'authorization_code') {
-      return json(400, { error: 'unsupported_grant_type' });
-    }
-
-    const code = String(form.get('code') || '');
-    const clientId = String(form.get('client_id') || '');
-    const redirectUri = String(form.get('redirect_uri') || '');
-    const verifier = String(form.get('code_verifier') || '');
-
-    const entry = this.codeByValue(code);
-    if (!entry) return json(400, { error: 'invalid_grant' });
-
-    const fail = () => {
-      this.dropCode(code);
-      return json(400, { error: 'invalid_grant' });
-    };
-
-    if (!clientId || entry.clientId !== clientId) return fail();
-    const client = this.clientById(clientId);
-    if (!client) return fail();
-    if (normalizeRedirect(client.redirectUri) !== normalizeRedirect(redirectUri) || !normalizeRedirect(redirectUri)) return fail();
-    if (!verifier) return fail();
-
-    const expected =
-      entry.challengeMethod === 'PLAIN'
-        ? verifier
-        : toBase64Url(await crypto.subtle.digest('SHA-256', encoder.encode(verifier)));
-    if (expected !== entry.challenge) return fail();
-
-    this.dropCode(code);
-    const session = this.createSession(entry.userId, { clientId, scope: entry.scope, ttlSeconds: 3600 });
-
-    return json(
-      200,
-      { access_token: session.token, token_type: 'Bearer', expires_in: session.expiresIn, scope: entry.scope || 'openid profile' },
-      { Pragma: 'no-cache' }
-    );
-  }
-
   /* ---------------- routes ---------------- */
 
   route(method, pattern, handler) {
@@ -1003,8 +741,8 @@ export class HubCore {
     const session = token ? this.sessionFor(token) : null;
     if (!session) return [null, json(401, { error: 'Sign in to Deluxe Drive again.', code: 'unauthorized' })];
 
-    // A token handed to a viewer such as Deluxe Docs belongs to an OAuth client.
-    // It may read the file list and the files, and nothing else.
+    // The key Deluxe Docs gets for a link id may read the file list and the
+    // files, and nothing else.
     if (session.clientId) {
       const path = new URL(request.url).pathname;
       const reading = request.method === 'GET' || request.method === 'HEAD';
@@ -1030,8 +768,8 @@ export class HubCore {
         server: true,
         storage: 'server',
         files: this.store.name,
-        version: 'worker 1',
-        oauth: { authorize: '/oauth/authorize', token: '/oauth/token', userInfo: '/oauth/userinfo' },
+        version: 'worker 2',
+        linkIds: { create: '/api/link', redeem: '/api/link/redeem', seconds: LINK_TTL_SECONDS },
         limits: { uploadBytes: this.maxUpload },
       })
     );
@@ -1276,47 +1014,46 @@ export class HubCore {
 
     r('GET', '/api/shared/:token', ({ request, params }) => this.serveShared(request, params.token));
 
-    r('GET', '/api/oauth/clients', ({ request }) => {
-      const [, denied] = this.need(request);
-      if (denied) return denied;
-      return json(200, {
-        clients: this.listClients().map((client) => ({
-          clientId: client.id,
-          name: client.name,
-          redirectUri: client.redirectUri,
-          createdAt: client.createdAt,
-        })),
-      });
-    });
-
-    r('POST', '/api/oauth/clients', async ({ request, url }) => {
+    r('POST', '/api/link', async ({ request }) => {
       const [session, denied] = this.need(request);
       if (denied) return denied;
+      if (session.clientId) return json(403, { error: 'Make a link id from Deluxe Drive itself.' });
+      return json(201, await this.createLinkId(session.userId));
+    });
+
+    // Deluxe Docs sends the pasted id here. The account is found from the id
+    // alone; what comes back is a key that can only read.
+    r('POST', '/api/link/redeem', async ({ request }) => {
+      const who = `redeem:${request.headers.get('cf-connecting-ip') || 'unknown'}`;
+      if (this.tooManyFailures(who)) {
+        return json(429, { error: 'Too many wrong link ids. Wait a few minutes and try again.', code: 'rate-limited' });
+      }
       const body = await readJsonBody(request);
-      const redirectUri = normalizeRedirect(body.redirectUri);
-      if (!redirectUri) return json(400, { error: 'That page address is not a valid https address.' });
-      const client = this.registerClient({ name: body.name, redirectUri });
-      const code = this.ensureDocsLink(session.userId);
-      return json(201, {
-        clientId: client.id,
-        name: client.name,
-        redirectUri: client.redirectUri,
-        linkId: code,
-        link: `${origin(url)}/connect/${code}`,
+      const account = await this.takeLinkId(body.linkId);
+      if (!account) {
+        this.noteFailure(who);
+        return json(404, {
+          error: 'That link id is not right or has run out. Make a new one in Deluxe Drive and paste it within 60 seconds.',
+          code: 'link-not-found',
+        });
+      }
+      const session = this.createSession(account.id, {
+        clientId: 'deluxe-docs',
+        scope: 'drive.read',
+        ttlSeconds: DOCS_SESSION_SECONDS,
+      });
+      return json(200, {
+        token: session.token,
+        expiresIn: session.expiresIn,
+        user: { id: account.id, name: account.name },
+        driveName: SERVER_NAME,
       });
     });
 
-    r('GET', '/api/docs/link', ({ request, url }) => {
-      const [session, denied] = this.need(request);
-      if (denied) return denied;
-      const code = this.ensureDocsLink(session.userId);
-      return json(200, { linkId: code, link: `${origin(url)}/connect/${code}` });
-    });
-
-    r('DELETE', '/api/oauth/clients/:id', ({ request, params }) => {
-      const [session, denied] = this.need(request);
-      if (denied) return denied;
-      this.removeClient(params.id);
+    // Disconnecting Deluxe Docs ends its key.
+    r('DELETE', '/api/link/session', ({ request }) => {
+      const token = bearerToken(request);
+      if (token) this.dropSession(token);
       return json(200, { ok: true });
     });
   }
@@ -1334,57 +1071,6 @@ export class HubCore {
     return this.streamBlob(request, info, share.name || share.blob_id, false);
   }
 
-  // https://drive/connect/<code> answers with the setup Deluxe Docs needs: the
-  // endpoints on this server and a client registered for the page asking.
-  serveConnectLink(request, url, code) {
-    if (request.method !== 'GET' && request.method !== 'HEAD') {
-      return json(405, { error: 'Only reading is allowed here.' });
-    }
-    const link = this.docsLinkByCode(code);
-    if (!link) return json(404, { error: 'That link id is not here. Copy it again from Deluxe Drive.' });
-
-    const redirectTo = normalizeRedirect(url.searchParams.get('redirect') || '');
-    if (redirectTo && !this.redirectAllowed(redirectTo)) {
-      return json(403, {
-        error: 'This Deluxe Drive does not allow that page to connect. Set ALLOWED_DOCS_ORIGINS on the drive to include it.',
-        code: 'origin-not-allowed',
-      });
-    }
-    const client = redirectTo ? this.registerClient({ name: 'Deluxe Docs', redirectUri: redirectTo }) : null;
-    const base = url.origin;
-
-    return json(200, {
-      driveName: SERVER_NAME,
-      driveUrl: base,
-      authorizeUrl: `${base}/oauth/authorize`,
-      tokenUrl: `${base}/oauth/token`,
-      userInfoUrl: `${base}/oauth/userinfo`,
-      clientId: client ? client.id : '',
-      redirectUri: client ? client.redirectUri : '',
-      accountId: link.account_id || '',
-      scope: 'openid profile drive.read',
-    });
-  }
-
-  async serveOauth(request, url) {
-    if (url.pathname === '/oauth/authorize') {
-      if (request.method !== 'GET' && request.method !== 'POST') return json(405, { error: 'Only GET and POST are allowed here.' });
-      return this.authorize(request, url);
-    }
-    if (url.pathname === '/oauth/token') {
-      if (request.method !== 'POST') return json(405, { error: 'Only POST is allowed here.' });
-      return this.token(request);
-    }
-    if (url.pathname === '/oauth/userinfo') {
-      const token = bearerToken(request);
-      const session = token ? this.sessionFor(token) : null;
-      const account = session ? this.accountById(session.userId) : null;
-      if (!session || !account) return json(401, { error: 'unauthorized' });
-      return json(200, { sub: account.id, name: account.name, preferred_username: account.name, email: '', scope: session.scope });
-    }
-    return text(404, 'Not found');
-  }
-
   async handle(request) {
     try {
       const url = new URL(request.url);
@@ -1395,8 +1081,6 @@ export class HubCore {
         if (!match) return json(404, { error: 'There is nothing at that address.' });
         return await match.handler({ request, url, params: match.params });
       }
-      if (url.pathname.startsWith('/oauth/')) return await this.serveOauth(request, url);
-      if (url.pathname.startsWith('/connect/')) return this.serveConnectLink(request, url, segments[1] || '');
       if (url.pathname.startsWith('/s/')) return await this.serveShared(request, segments[1] || '');
       return text(404, 'Not found');
     } catch (error) {
@@ -1408,4 +1092,4 @@ export class HubCore {
   }
 }
 
-export { escapeHtml, SESSION_TTL_SECONDS };
+export { SESSION_TTL_SECONDS, LINK_TTL_SECONDS };

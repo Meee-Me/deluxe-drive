@@ -1,8 +1,9 @@
 // Deluxe Drive on Cloudflare Workers.
 //
 // Static files (index.html, js/, styles.css, ...) are served by Workers
-// Assets. Everything under /api, /oauth, /connect and /s goes to one Durable
-// Object, which keeps the accounts in SQLite and the files in R2.
+// Assets. Everything under /api and /s goes to one Durable
+// Object, which keeps the accounts and files in its SQLite database (or the
+// files in R2, when a bucket is bound as FILES).
 
 import { DurableObject } from 'cloudflare:workers';
 import { HubCore } from './hub.js';
@@ -36,7 +37,7 @@ export default {
     if (request.method === 'OPTIONS') return withCors(request, new Response(null, { status: 204 }));
 
     const { pathname } = new URL(request.url);
-    if (/^\/(api|oauth|connect|s)\//.test(pathname)) {
+    if (/^\/(api|s)\//.test(pathname)) {
       if (!env.HUB) {
         return withCors(
           request,

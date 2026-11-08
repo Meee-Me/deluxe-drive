@@ -12,7 +12,9 @@
 import { db as localDb } from './db.js';
 
 const DOCS_KEY = 'dd.docs';
-const DOCS_DEFAULTS = { url: '', clientId: '', link: '', linkId: '', autoOpen: true };
+// Where Deluxe Docs lives. A link id made here is pasted there.
+export const DOCS_URL = 'https://deluxe-docs.deluxelordd.workers.dev';
+const DOCS_DEFAULTS = { url: '', autoOpen: true };
 const SERVER_KEY = 'dd.server';
 
 const state = {
@@ -400,9 +402,6 @@ export function docsSettings() {
     const parsed = JSON.parse(raw);
     return {
       url: typeof parsed.url === 'string' ? parsed.url : '',
-      clientId: typeof parsed.clientId === 'string' ? parsed.clientId : '',
-      link: typeof parsed.link === 'string' ? parsed.link : '',
-      linkId: typeof parsed.linkId === 'string' ? parsed.linkId : '',
       autoOpen: parsed.autoOpen !== false,
     };
   } catch (error) {
@@ -413,9 +412,6 @@ export function docsSettings() {
 export function saveDocsSettings(next) {
   const value = {
     url: typeof next.url === 'string' ? next.url : '',
-    clientId: typeof next.clientId === 'string' ? next.clientId : '',
-    link: typeof next.link === 'string' ? next.link : '',
-    linkId: typeof next.linkId === 'string' ? next.linkId : '',
     autoOpen: next.autoOpen !== false,
   };
   try {
@@ -427,97 +423,20 @@ export function saveDocsSettings(next) {
 }
 
 export function docsReady() {
-  const settings = docsSettings();
-  return !!settings.url && !!settings.clientId && isOnline();
+  return !!docsSettings().url && isOnline();
 }
 
-// The viewer address, cleaned to the page itself: no query, no hash, no
-// trailing slash. Deluxe Docs returns to exactly this address after sign-in.
-// "deluxe-docs.example" is what people paste, so https is assumed for it.
-export function normalizePage(value) {
-  let raw = String(value || '').trim();
-  if (!raw) return null;
-  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) raw = `https://${raw.replace(/^\/+/, '')}`;
-
-  let url;
-  try {
-    url = new URL(raw);
-  } catch (error) {
-    return null;
-  }
-
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
-  if (url.protocol === 'http:' && !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(url.hostname)) return null;
-  if (!url.hostname) return null;
-
-  const pathname = url.pathname.replace(/\/+$/, '');
-  return `${url.origin}${pathname}`;
-}
-
-export async function connectDocs(pageUrl) {
+// A link id for Deluxe Docs: 12 letters and digits, new every time, good for
+// 60 seconds and one use. Deluxe Docs trades it for a key that can only read
+// this account's files. Making one also turns on opening documents in Docs.
+export async function generateLinkId() {
   if (!isOnline()) {
-    throw new Error('Deluxe Docs needs the Deluxe Drive server. This copy is running without one.');
+    throw new Error('Link IDs need the Deluxe Drive server. Open the drive at its workers.dev address.');
   }
-
-  const normalized = normalizePage(pageUrl);
-  if (!normalized) {
-    throw new Error('Enter the Deluxe Docs page address, starting with https://');
-  }
-
-  const data = await requestJson('/api/oauth/clients', {
-    method: 'POST',
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ name: 'Deluxe Docs', redirectUri: normalized }),
-  });
-
-  return saveDocsSettings({
-    ...docsSettings(),
-    url: normalized,
-    clientId: data.clientId,
-    link: data.link || '',
-    linkId: data.linkId || '',
-    autoOpen: true,
-  });
-}
-
-// This account's connection link. The server makes it once and keeps it, so
-// every account has its own id and it stays the same across visits.
-export async function docsLink() {
-  if (!isOnline()) throw new Error('Deluxe Docs needs the Deluxe Drive server.');
-
-  const data = await requestJson('/api/docs/link');
-  return saveDocsSettings({
-    ...docsSettings(),
-    linkId: data.linkId || '',
-    link: data.link || '',
-  });
-}
-
-export async function disconnectDocs() {
+  const data = await requestJson('/api/link', { method: 'POST' });
   const settings = docsSettings();
-  if (settings.clientId && isOnline()) {
-    try {
-      await requestJson(`/api/oauth/clients/${encodeURIComponent(settings.clientId)}`, { method: 'DELETE' });
-    } catch (error) {
-      /* already gone on the server; drop it here anyway */
-    }
-  }
-  return saveDocsSettings({ ...DOCS_DEFAULTS, autoOpen: settings.autoOpen });
-}
-
-// What Deluxe Docs needs to sign in against this drive, for a viewer that
-// asks for it.
-export function docsConfig(settings = docsSettings()) {
-  const origin = state.base || location.origin;
-  return {
-    driveName: 'Deluxe Drive',
-    driveUrl: origin,
-    authorizeUrl: `${origin}/oauth/authorize`,
-    tokenUrl: `${origin}/oauth/token`,
-    userInfoUrl: `${origin}/oauth/userinfo`,
-    clientId: settings.clientId || '',
-    scope: 'openid profile drive.read',
-  };
+  if (!settings.url) saveDocsSettings({ ...settings, url: DOCS_URL });
+  return { linkId: String(data.linkId || ''), expiresIn: Number(data.expiresIn) || 60 };
 }
 
 function viewerUrl(fileUrl, name) {

@@ -1824,322 +1824,104 @@ function showCredits() {
 /* Deluxe Docs connection                                              */
 /* ------------------------------------------------------------------ */
 
-// Connect the documents app: the drive registers it as an OAuth viewer and
-// hands it a share link for each document opened here. Sign-in for the viewer
-// happens on Deluxe Drive's own pages, so its password never leaves this site.
-// "Link for Deluxe Docs" in the account menu: copy the connection link this
-// account's Docs app pastes, making one first if there is none.
-async function copyDocsLink() {
-  if (!cloud.isOnline()) {
-    toast('Deluxe Docs needs the Deluxe Drive server.');
-    showDocsDialog();
-    return;
-  }
-
-  try {
-    const saved = await cloud.docsLink();
-    if (!saved.link) throw new Error('Could not make the link. Press Connect again.');
-    await copyText(saved.link);
-    toast('Connection link copied');
-  } catch (error) {
-    toast(error.message || 'Could not copy the connection link');
-  }
-}
-
+// Account menu > Connect Deluxe Docs: one button that makes a link id. The id
+// is copied, pasted into Deluxe Docs, and Docs finds this account from it. Each
+// id works once and for 60 seconds; while this stays open a fresh one replaces
+// it when it runs out.
 function showDocsDialog() {
   const root = $('#dialog');
   if (!root) return;
 
   const online = cloud.isOnline();
-  const settings = cloud.docsSettings();
-
-  // The Deluxe Docs page this drive is usually connected to; typing over it is
-  // how another address is registered.
-  const docsDefault = 'https://deluxe-docs.deluxelordd.workers.dev';
-
-  const status = !online
-    ? `This copy (${location.host}) is served as plain files, so it has no server of its own and keeps files in this browser. Enter the address of a Deluxe Drive server below — or open the drive from that server.`
-    : settings.url
-      ? `Connected to ${settings.url}. The share link needs no sign-in, and Deluxe Docs can only read the files you open.`
-      : 'Not connected yet. Paste the Deluxe Docs page address, for example https://deluxe-docs.deluxelordd.workers.dev.';
-
-  // Where the drive's server actually is, so it can be copied into another
-  // copy of the drive or into Deluxe Docs instead of being guessed.
-  const serverLine = online
-    ? `
-      <p class="docs-status docs-server">
-        Server <code>${escapeHtml(cloud.serverAddress())}</code>
-        <button class="link-inline" type="button" data-action="copy-server">copy</button>
-      </p>`
-    : '';
-
-  // A static copy can still use a server somewhere else, once it is told where.
-  const serverField = online
-    ? ''
-    : `
-      <label class="docs-field">
-        <span>Deluxe Drive server address</span>
-        <input id="docs-server" type="url" inputmode="url" autocapitalize="none" autocorrect="off" spellcheck="false"
-          placeholder="https://your-drive.freemilk.app" value="${escapeHtml(cloud.savedServer())}" />
-      </label>`;
-
-  // The link Deluxe Docs pastes. It is shown as its short id, with the whole
-  // link under it, and it can be remade at any time.
-  const linkId = settings.linkId || (settings.link ? String(settings.link).split('/').pop() : '');
-  const setup = !online
-    ? ''
-    : linkId
-      ? `
-      <div class="docs-setup">
-        <p class="docs-setup-id">Link ID <code>${escapeHtml(linkId)}</code></p>
-        <button class="btn ghost" type="button" data-action="copy-link">Copy connection link</button>
-        ${settings.link ? `<p class="docs-setup-link">${escapeHtml(settings.link)}</p>` : ''}
-        <p class="docs-setup-hint">
-          This account's own link. Paste it into the Connect box in Deluxe Docs; the password is
-          still typed on this drive's own page.
-        </p>
-      </div>`
-      : `
-      <p class="docs-status">
-        This account's Link ID is made on the server the first time the drive opens on it.
-      </p>`;
-
   root.innerHTML = `
     <div class="dialog-backdrop" data-close="1"></div>
-    <div class="dialog docs-dialog" role="dialog" aria-modal="true" aria-label="Deluxe Docs">
-      <h2>Deluxe Docs</h2>
-      <p class="dialog-msg">
-        Connect the documents app and every document you open here is handed to it over a share link.
-        ${online ? '' : ' Enter the address of a Deluxe Drive server below, then use it, or open the drive from that server.'}
-      </p>
-
-      <label class="docs-field">
-        <span>Deluxe Docs page address</span>
-        <input id="docs-url" type="url" inputmode="url" autocapitalize="none" autocorrect="off" spellcheck="false"
-          placeholder="https://…" value="${escapeHtml(settings.url || docsDefault)}" />
-      </label>
-
-      <label class="docs-check">
-        <input id="docs-auto" type="checkbox" ${settings.autoOpen ? 'checked' : ''} />
-        <span>Open documents in Deluxe Docs automatically</span>
-      </label>
-
-      <p id="docs-status" class="docs-status">${escapeHtml(status)}</p>
-      ${serverLine}
-      ${serverField}
-      ${setup}
-
+    <div class="dialog docs-dialog" role="dialog" aria-modal="true" aria-label="Connect Deluxe Docs">
+      <h2>Connect Deluxe Docs</h2>
+      <p class="dialog-msg">${
+        online
+          ? 'Generate a link ID, then paste it into Deluxe Docs within 60 seconds.'
+          : 'Link IDs need the Deluxe Drive server. Open the drive at its workers.dev address and try again.'
+      }</p>
+      <div class="link-id" id="link-id" hidden>
+        <button class="link-id-code" id="link-id-code" type="button" aria-label="Copy link ID"></button>
+        <p class="link-id-note" id="link-id-note" aria-live="polite"></p>
+      </div>
       <div class="dialog-actions">
-        ${
-          online && settings.url
-            ? '<button class="btn ghost" type="button" data-action="disconnect">Disconnect</button>'
-            : ''
-        }
-        ${
-          online && settings.url
-            ? '<button class="btn ghost" type="button" data-action="open-docs">Open Deluxe Docs</button>'
-            : ''
-        }
-        ${
-          online
-            ? ''
-            : '<button class="btn ghost" type="button" data-action="check">Use this server</button>'
-        }
-        <button class="btn ghost" type="button" data-action="close">Close</button>
-        <button class="btn primary" type="button" data-action="connect">${
-          settings.url ? 'Reconnect' : 'Connect'
-        }</button>
+        <button class="btn primary" type="button" id="link-id-make" ${online ? '' : 'disabled'}>Generate link ID</button>
       </div>
     </div>`;
   root.classList.remove('hidden');
 
-  const statusNode = root.querySelector('#docs-status');
-  const urlField = root.querySelector('#docs-url');
-  const autoField = root.querySelector('#docs-auto');
-  const connectButton = root.querySelector('[data-action="connect"]');
+  const box = root.querySelector('#link-id');
+  const codeButton = root.querySelector('#link-id-code');
+  const note = root.querySelector('#link-id-note');
+  const make = root.querySelector('#link-id-make');
+  let timer = null;
+  let left = 0;
+  let copied = false;
+  let closed = false;
 
   const close = () => {
+    closed = true;
+    clearInterval(timer);
+    document.removeEventListener('keydown', onKey);
     root.classList.add('hidden');
     root.innerHTML = '';
   };
-
+  const onKey = (event) => {
+    if (event.key === 'Escape') close();
+  };
+  document.addEventListener('keydown', onKey);
   root.querySelector('[data-close]').addEventListener('click', close);
-  root.querySelector('[data-action="close"]').addEventListener('click', close);
 
-  if (autoField) {
-    autoField.addEventListener('change', () => {
-      cloud.saveDocsSettings({ ...cloud.docsSettings(), autoOpen: autoField.checked });
-    });
-  }
+  const showNote = () => {
+    note.textContent = `${copied ? 'Copied. ' : 'Tap to copy. '}Works once, for ${left}s.`;
+  };
 
-  const disconnect = root.querySelector('[data-action="disconnect"]');
-  if (disconnect) {
-    disconnect.addEventListener('click', async () => {
-      disconnect.disabled = true;
-      try {
-        await cloud.disconnectDocs();
-        toast('Deluxe Docs disconnected');
-      } catch (error) {
-        toast(error.message || 'Could not disconnect Deluxe Docs');
+  const generate = async (copyIt) => {
+    make.disabled = true;
+    try {
+      const { linkId, expiresIn } = await cloud.generateLinkId();
+      if (closed) return;
+      codeButton.textContent = linkId;
+      box.hidden = false;
+      left = expiresIn;
+      copied = false;
+      if (copyIt) {
+        try {
+          copied = await copyText(linkId);
+        } catch (error) {
+          copied = false;
+        }
+        if (copied) toast('Link ID copied');
       }
-      close();
-    });
-  }
-
-  const copyServer = root.querySelector('[data-action="copy-server"]');
-  if (copyServer) {
-    copyServer.addEventListener('click', async () => {
-      await copyText(cloud.serverAddress());
-      toast('Server address copied');
-    });
-  }
-
-  const copyLink = root.querySelector('[data-action="copy-link"]');
-  if (copyLink) {
-    copyLink.addEventListener('click', async () => {
-      copyLink.disabled = true;
-      try {
-        // A fresh code every time: a link made before a restart is no longer
-        // known to the server, and a new one costs nothing.
-        const saved = await cloud.docsLink();
-        if (!saved.link) throw new Error('Could not make a connection link. Press Connect again.');
-        await copyText(saved.link);
-        toast('Connection link copied');
-      } catch (error) {
-        toast(error.message || 'Could not copy the connection link');
-      }
-      copyLink.disabled = false;
-    });
-  }
-
-  const openDocsButton = root.querySelector('[data-action="open-docs"]');  if (openDocsButton) {
-    openDocsButton.addEventListener('click', () => {
-      window.open(settings.url, '_blank', 'noopener');
-    });
-  }
-
-  // A server that answers now but did not when the page opened (a cold start,
-  // a host that was still waking up) is worth another look: reloading puts the
-  // whole drive on it, sign-in included, instead of silently staying local.
-  const checkButton = root.querySelector('[data-action="check"]');
-  if (checkButton) {
-    checkButton.addEventListener('click', async () => {
-      checkButton.disabled = true;
-
-      const field = root.querySelector('#docs-server');
-      const typed = field ? String(field.value || '').trim() : '';
-      const show = (message) => {
-        if (statusNode) statusNode.textContent = message;
-      };
-
-      if (typed) {
-        const saved = cloud.setServer(typed);
-        if (!saved) {
-          show('Enter the server address with https://, for example https://your-drive.freemilk.app.');
-          checkButton.disabled = false;
+      showNote();
+      clearInterval(timer);
+      timer = setInterval(() => {
+        left -= 1;
+        if (left <= 0) {
+          clearInterval(timer);
+          note.textContent = 'That one ran out. Making a new one…';
+          generate(false);
           return;
         }
-      }
-
-      show('Looking for the Deluxe Drive server…');
-
-      const server = await cloud.refreshServer();
-      if (!server) {
-        show(
-          typed
-            ? `No Deluxe Drive server answered at ${typed}. Check the address, and that the server is running.`
-            : 'No Deluxe Drive server answered. Open the drive from its server, or enter a server address above.'
-        );
-        checkButton.disabled = false;
-        return;
-      }
-
-      show('Server found — reloading the drive with it…');
-      location.reload();
-    });
-  }
-
-  if (urlField) {
-    urlField.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter') return;
-      event.preventDefault();
-      connectButton.click();
-    });
-  }
-
-  connectButton.addEventListener('click', async () => {
-    const pageUrl = urlField ? String(urlField.value || '').trim() : '';
-
-    if (!pageUrl) {
-      const message = 'Type the Deluxe Docs page address, for example https://deluxe-docs.deluxelordd.workers.dev.';
-      if (statusNode) statusNode.textContent = message;
-      toast(message);
-      if (urlField) urlField.focus();
-      return;
-    }
-
-    // Without a server there is nothing to register yet: take the address
-    // typed above, find that server, and come back on it.
-    if (!cloud.isOnline()) {
-      const field = root.querySelector('#docs-server');
-      const typed = field ? String(field.value || '').trim() : '';
-
-      if (!typed) {
-        const message = 'Enter the Deluxe Drive server address above first, or open the drive from its server.';
-        if (statusNode) statusNode.textContent = message;
-        toast(message);
-        if (field) field.focus();
-        return;
-      }
-
-      if (!cloud.setServer(typed)) {
-        const message = 'Enter the server address with https://, for example https://your-drive.freemilk.app.';
-        if (statusNode) statusNode.textContent = message;
-        toast(message);
-        return;
-      }
-
-      connectButton.disabled = true;
-      if (statusNode) statusNode.textContent = 'Looking for the Deluxe Drive server…';
-
-      const server = await cloud.refreshServer();
-      if (!server) {
-        if (statusNode) statusNode.textContent = `No Deluxe Drive server answered at ${typed}. Check the address, and that it is published.`;
-        connectButton.disabled = false;
-        return;
-      }
-
-      if (statusNode) statusNode.textContent = 'Server found — reloading the drive with it…';
-      location.reload();
-      return;
-    }
-
-    connectButton.disabled = true;
-    if (statusNode) statusNode.textContent = 'Connecting…';
-
-    try {
-      const saved = await cloud.connectDocs(pageUrl);
-      cloud.saveDocsSettings({ ...saved, autoOpen: autoField ? autoField.checked : true });
-      toast('Deluxe Docs connected — the link is below');
-      // Stay on the dialog, so the Link ID it just made is right there to copy.
-      close();
-      showDocsDialog();
+        showNote();
+      }, 1000);
     } catch (error) {
-      let message = (error && error.message) || 'Could not connect Deluxe Docs.';
-      if (error && error.status === 401) message = 'Sign in to Deluxe Drive again, then connect Deluxe Docs.';
-      if (statusNode) statusNode.textContent = message;
-      connectButton.disabled = false;
-      toast(message);
+      if (!closed) toast(error.message || 'Could not make a link ID');
+    } finally {
+      if (!closed) make.disabled = !cloud.isOnline();
     }
+  };
+
+  make.addEventListener('click', () => generate(true));
+  codeButton.addEventListener('click', async () => {
+    copied = await copyText(codeButton.textContent);
+    showNote();
+    toast('Link ID copied');
   });
 }
 
-/* ------------------------------------------------------------------ */
-/* Shared links                                                        */
-/* ------------------------------------------------------------------ */
-
-// Every link this account has handed out. One list, so a link made for
-// Deluxe Docs - or for anyone else - can still be found and closed.
 async function showSharesDialog() {
   const root = $('#dialog');
   if (!root) return;
@@ -2330,15 +2112,8 @@ function bindUI() {
       event.currentTarget,
       [
         { action: 'password', label: 'Change password', icon: 'lock' },
-        {
-          action: 'docs',
-          label: cloud.docsSettings().url ? 'Deluxe Docs (connected)' : 'Connect Deluxe Docs',
-          icon: 'doc',
-        },
+        { action: 'docs', label: 'Connect Deluxe Docs', icon: 'doc' },
         ...(cloud.isOnline() ? [{ action: 'shares', label: 'Shared links', icon: 'link' }] : []),
-        ...(cloud.isOnline()
-          ? [{ action: 'docs-link', label: 'Link for Deluxe Docs', icon: 'link' }]
-          : []),
         { action: 'credits', label: 'Credits', icon: 'info' },
         { action: 'lock', label: 'Lock drive', icon: 'logout' },
         { action: 'reset', label: 'Erase my files', icon: 'trash', danger: true },
@@ -2347,7 +2122,6 @@ function bindUI() {
         if (action === 'password') changePasswordFlow();
         else if (action === 'docs') showDocsDialog();
         else if (action === 'shares') showSharesDialog();
-        else if (action === 'docs-link') copyDocsLink();
         else if (action === 'credits') showCredits();
         else if (action === 'lock') lockDrive();
         else if (action === 'reset') resetDrive();
@@ -2544,16 +2318,6 @@ async function enterApp(user) {
   }
 
   await refreshShares();
-
-  // Every account gets its own Link ID for Deluxe Docs, made by the server and
-  // kept there, so it is ready before anyone asks for it.
-  if (cloud.isOnline()) {
-    try {
-      await cloud.docsLink();
-    } catch (error) {
-      /* the dialog can ask again */
-    }
-  }
 
   render();
 }

@@ -1,17 +1,16 @@
 // Runs the Worker's server code in Node: node:sqlite stands in for the Durable
 // Object's SQL, and a Map stands in for R2. Run: node tests/worker.test.mjs
 import assert from 'node:assert/strict';
-import { createHash, pbkdf2Sync, randomBytes } from 'node:crypto';
+import { pbkdf2Sync, randomBytes } from 'node:crypto';
 import { HubCore } from '../worker/hub.js';
 import { NodeSql, FakeR2 } from './fakes.mjs';
 
 const origin = 'https://drive.test';
-const DOCS = 'https://deluxe-docs.deluxelordd.workers.dev';
 // STORE=r2 runs against a fake R2 bucket; the default keeps files in SQLite.
 const useR2 = process.env.STORE === 'r2';
 const files = new FakeR2();
 const sqlAdapter = new NodeSql();
-const hub = new HubCore(sqlAdapter, { ...(useR2 ? { FILES: files } : {}), ALLOWED_DOCS_ORIGINS: DOCS });
+const hub = new HubCore(sqlAdapter, useR2 ? { FILES: files } : {});
 const hasBlob = (key) => (useR2
   ? files.m.has(key)
   : sqlAdapter.db.prepare('SELECT COUNT(*) AS c FROM chunks WHERE key = ?').get(key).c > 0);
@@ -27,9 +26,7 @@ async function call(method, path, { token, body, headers = {}, raw } = {}) {
   return hub.handle(req);
 }
 const j = async (res) => res.json();
-const form = (obj) => ({ raw: new URLSearchParams(obj).toString(), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
 const derive = (pw, saltHex) => pbkdf2Sync(pw, Buffer.from(saltHex, 'hex'), 120000, 32, 'sha256').toString('hex');
-const b64u = (b) => Buffer.from(b).toString('base64url');
 
 let n = 0;
 const ok = (name) => console.log(`ok ${++n} ${name}`);
@@ -128,71 +125,56 @@ assert.equal((await call('POST', '/api/files/d_1/share', { token: T })).status, 
 assert.equal((await j(await call('GET', '/api/files/shares', { token: T }))).shares.length, 1);
 assert.equal((await call('GET', '/s/' + 'a'.repeat(32))).status, 404); ok('share links');
 
-// docs link + connect
-const link = await j(await call('GET', '/api/docs/link', { token: T }));
-const link2 = await j(await call('GET', '/api/docs/link', { token: T }));
-assert.equal(link.linkId, link2.linkId); assert.equal(link.link, `${origin}/connect/${link.linkId}`);
-r = await call('GET', `/connect/${link.linkId}?redirect=${encodeURIComponent(DOCS + '/')}`);
+// link ids for Deluxe Docs
+r = await call('POST', '/api/link', { token: T });
+assert.equal(r.status, 201);
+const l1 = await j(r);
+assert.match(l1.linkId, /^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/);
+assert.equal(l1.expiresIn, 60);
+const l2 = await j(await call('POST', '/api/link', { token: T }));
+assert.notEqual(l2.linkId, l1.linkId);
+assert.equal((await call('POST', '/api/link')).status, 401);
+// a newer id ends the older one
+assert.equal((await call('POST', '/api/link/redeem', { body: { linkId: l1.linkId } })).status, 404);
+// pasted with spaces, lower case and no dashes still works
+const pasted = ` ${l2.linkId.replace(/-/g, '').toLowerCase()} `;
+r = await call('POST', '/api/link/redeem', { body: { linkId: pasted } });
 assert.equal(r.status, 200);
-const conn = await j(r);
-assert.equal(conn.authorizeUrl, `${origin}/oauth/authorize`); assert.ok(conn.clientId.startsWith('dc_'));
-assert.equal(conn.redirectUri, DOCS + '/'); // a site root keeps its slash
-r = await call('GET', `/connect/${link.linkId}?redirect=${encodeURIComponent('https://evil.example/x')}`);
-assert.equal(r.status, 403);
-assert.equal((await call('GET', '/connect/' + 'b'.repeat(12))).status, 404);
-assert.equal((await call('GET', `/connect/${link.linkId}`)).status, 200); ok('link id, connect, origin allow-list');
+const redeemed = await j(r);
+assert.equal(redeemed.user.name, 'Shivad'); assert.ok(redeemed.token); assert.ok(redeemed.expiresIn > 86400);
+// one use only
+assert.equal((await call('POST', '/api/link/redeem', { body: { linkId: l2.linkId } })).status, 404);
+assert.equal((await call('POST', '/api/link/redeem', { body: { linkId: 'nonsense' } })).status, 404);
+ok('link ids: new each time, one use, newest wins, forgiving paste');
 
-// OAuth code flow with PKCE
-const verifier = b64u(randomBytes(32));
-const challenge = b64u(createHash('sha256').update(verifier).digest());
-const q = new URLSearchParams({ response_type: 'code', client_id: conn.clientId, redirect_uri: DOCS, scope: 'openid profile drive.read', state: 'st8', code_challenge: challenge, code_challenge_method: 'S256' });
-r = await call('GET', `/oauth/authorize?${q}`);
-assert.equal(r.status, 200); const loginHtml = await r.text();
-assert.match(loginHtml, /Sign in to Deluxe Drive/); assert.match(loginHtml, /id="hs"/);
-r = await call('POST', `/oauth/authorize?${q}`, form({ name: 'Shivad', hash: 'e'.repeat(64) }));
-assert.equal(r.status, 401);
-r = await call('POST', `/oauth/authorize?${q}`, form({ name: 'Shivad', hash }));
-assert.equal(r.status, 200); const consent = await r.text();
-const reqId = /name="request" value="([0-9a-f]+)"/.exec(consent)[1];
-assert.match(consent, /deluxe-docs\.deluxelordd\.workers\.dev/);
-r = await call('POST', `/oauth/authorize?${q}`, form({ request: reqId, decision: 'approve' }));
-assert.equal(r.status, 302);
-const back = new URL(r.headers.get('location'));
-assert.equal(back.origin + back.pathname, DOCS + '/'); assert.equal(back.searchParams.get('state'), 'st8');
-const code = back.searchParams.get('code');
-// wrong verifier burns the code
-r = await call('POST', '/oauth/token', form({ grant_type: 'authorization_code', code, client_id: conn.clientId, redirect_uri: DOCS, code_verifier: 'wrong' }));
-assert.equal(r.status, 400);
-r = await call('POST', '/oauth/token', form({ grant_type: 'authorization_code', code, client_id: conn.clientId, redirect_uri: DOCS, code_verifier: verifier }));
-assert.equal(r.status, 400); ok('oauth: login, consent, code, wrong verifier burns it');
+// an id runs out after 60 seconds
+const l3 = await j(await call('POST', '/api/link', { token: T }));
+sqlAdapter.db.prepare('UPDATE link_codes SET expires_at = ?').run(Date.now() - 1);
+assert.equal((await call('POST', '/api/link/redeem', { body: { linkId: l3.linkId } })).status, 404);
+ok('link ids expire');
 
-// do it again, properly
-r = await call('POST', `/oauth/authorize?${q}`, form({ name: 'Shivad', hash }));
-const reqId2 = /name="request" value="([0-9a-f]+)"/.exec(await r.text())[1];
-r = await call('POST', `/oauth/authorize?${q}`, form({ request: reqId2, decision: 'approve' }));
-const code2 = new URL(r.headers.get('location')).searchParams.get('code');
-r = await call('POST', '/oauth/token', form({ grant_type: 'authorization_code', code: code2, client_id: conn.clientId, redirect_uri: DOCS + '/', code_verifier: verifier }));
-assert.equal(r.status, 200);
-const tok = await j(r);
-assert.equal(tok.token_type, 'Bearer'); assert.ok(tok.access_token);
-r = await call('POST', '/oauth/token', form({ grant_type: 'authorization_code', code: code2, client_id: conn.clientId, redirect_uri: DOCS, code_verifier: verifier }));
-assert.equal(r.status, 400); ok('oauth: token issued once, code cannot be reused');
-
-const V = tok.access_token;
-assert.equal((await j(await call('GET', '/oauth/userinfo', { token: V }))).name, 'Shivad');
+const V = redeemed.token;
+assert.equal((await j(await call('GET', '/api/auth/me', { token: V }))).user.name, 'Shivad');
 assert.equal((await j(await call('GET', '/api/db/nodes', { token: V }))).nodes.length, 2);
 r = await call('GET', '/api/db/blobs/f_1', { token: V });
-assert.equal((await r.arrayBuffer()).byteLength, 1000); ok('viewer token can list and read files');
+assert.equal((await r.arrayBuffer()).byteLength, 1000); ok('docs key can list and read files');
 
 // viewer token is read-only and cannot reach anything else
 assert.equal((await call('PUT', '/api/db/nodes/f_1', { token: V, body: node })).status, 403);
 assert.equal((await call('DELETE', '/api/db/nodes/f_1', { token: V })).status, 403);
 assert.equal((await call('PUT', '/api/db/blobs/f_1', { token: V, raw: new Uint8Array(3), headers: { 'Content-Length': '3' } })).status, 403);
 assert.equal((await call('GET', '/api/db/settings/theme', { token: V })).status, 403);
-assert.equal((await call('GET', '/api/docs/link', { token: V })).status, 403);
+assert.equal((await call('POST', '/api/link', { token: V })).status, 403);
+assert.equal((await call('POST', '/api/files/f_1/share', { token: V })).status, 403);
 assert.equal((await call('POST', '/api/db/clear', { token: V })).status, 403);
 assert.equal((await call('DELETE', `/api/accounts/${acct.user.id}`, { token: V })).status, 403);
-assert.equal((await j(await call('GET', '/api/db/nodes', { token: T }))).nodes.length, 2); ok('viewer token is read-only');
+assert.equal((await j(await call('GET', '/api/db/nodes', { token: T }))).nodes.length, 2); ok('docs key is read-only');
+
+// disconnecting ends the key
+const l4 = await j(await call('POST', '/api/link', { token: T }));
+const V2 = (await j(await call('POST', '/api/link/redeem', { body: { linkId: l4.linkId } }))).token;
+assert.equal((await call('DELETE', '/api/link/session', { token: V2 })).status, 200);
+assert.equal((await call('GET', '/api/db/nodes', { token: V2 })).status, 401); ok('disconnecting ends the docs key');
 
 // second account is isolated
 const salt2 = randomBytes(16).toString('hex'); const hash2 = derive('pw2', salt2);
@@ -214,6 +196,10 @@ assert.equal((await j(await call('PATCH', `/api/accounts/${acct.user.id}`, { tok
 for (let i = 0; i < 8; i++) await call('POST', '/api/auth/session', { body: { userId: other.user.id, hash: 'c'.repeat(64) } });
 assert.equal((await call('POST', '/api/auth/session', { body: { userId: other.user.id, hash: hash2 } })).status, 429); ok('sign-in is throttled after repeated failures');
 
+for (let i = 0; i < 8; i++) await call('POST', '/api/link/redeem', { body: { linkId: 'AAAA-BBBB-CCCC' }, headers: { 'cf-connecting-ip': '9.9.9.9' } });
+assert.equal((await call('POST', '/api/link/redeem', { body: { linkId: 'AAAA-BBBB-CCCC' }, headers: { 'cf-connecting-ip': '9.9.9.9' } })).status, 429);
+assert.equal((await call('POST', '/api/link/redeem', { body: { linkId: 'AAAA-BBBB-CCCC' }, headers: { 'cf-connecting-ip': '8.8.8.8' } })).status, 404); ok('guessing link ids is throttled per address');
+
 // delete file removes blob and share
 assert.equal((await call('DELETE', '/api/db/nodes/f_1', { token: T })).status, 200);
 assert.equal((await call('GET', `/s/${share.token}`)).status, 404);
@@ -228,6 +214,7 @@ assert.equal((await call('GET', '/api/auth/me', { token: T })).status, 401); ok(
 
 // unknown routes
 assert.equal((await call('GET', '/api/nope')).status, 404);
-assert.equal((await call('POST', '/oauth/token', form({ grant_type: 'password' }))).status, 400); ok('unknown routes and grants');
+assert.equal((await call('GET', '/oauth/authorize')).status, 404);
+assert.equal((await call('GET', '/connect/abc')).status, 404); ok('unknown routes');
 
 console.log(`\nall ${n} groups passed`);

@@ -9,7 +9,7 @@ import { NodeSql } from './fakes.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const port = Number(process.argv[2] || 8787);
-const hub = new HubCore(new NodeSql(), { ALLOWED_DOCS_ORIGINS: process.env.ALLOWED_DOCS_ORIGINS || '' });
+const hub = new HubCore(new NodeSql(), {});
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
 
 http.createServer(async (req, res) => {
@@ -17,7 +17,7 @@ http.createServer(async (req, res) => {
   const url = new URL(req.url, origin);
   const cors = { 'Access-Control-Allow-Origin': req.headers.origin || '*', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, Range, X-Deluxe-Mime, X-Deluxe-Name', 'Access-Control-Allow-Methods': 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS' };
   if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
-  if (/^\/(api|oauth|connect|s)\//.test(url.pathname)) {
+  if (/^\/(api|s)\//.test(url.pathname)) {
     const chunks = []; for await (const c of req) chunks.push(c);
     const body = chunks.length ? Buffer.concat(chunks) : undefined;
     const request = new Request(url, { method: req.method, headers: req.headers, body: ['GET', 'HEAD'].includes(req.method) ? undefined : body, duplex: 'half' });

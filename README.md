@@ -33,11 +33,10 @@ shared — and it can hand a document to **Deluxe Docs**.
   that one file, with HTTP Range support so video and PDF seek. Shared files wear a link badge, and
   **Shared links** in the account menu lists every link with Copy and Stop. Deleting a file also
   removes its stored data and its link.
-- **Deluxe Docs** — *Connect Deluxe Docs* in the account menu registers the documents app as an
-  OAuth 2.0 + PKCE viewer of this drive (Authorization Code flow, consent page, `/oauth/token`,
-  `/oauth/userinfo`). Once connected, opening a document (Word, Excel, slides, PDF, text) shares it
-  and opens it in Deluxe Docs; if that fails or is switched off, it opens in the built-in preview.
-  **Open Deluxe Docs** in the connection dialog reopens the viewer at any time.
+- **Deluxe Docs** — *Connect Deluxe Docs* in the account menu has one button, **Generate link ID**:
+  a 60-second, one-use code that is pasted into Deluxe Docs to connect it to this account (read
+  only). Once connected, opening a document (Word, Excel, slides, PDF, text) shares it and opens it
+  in Deluxe Docs; if that fails, it opens in the built-in preview.
 - **More websites** — a button in the top bar (and a link on the lock screen) opens a list of the
   other Deluxe Lord sites: YouTube Guider AI, Deluxe Convert and Deluxe Translate.
 - **Select mode** — select several items and download, star, move or delete them together, plus
@@ -81,13 +80,12 @@ server/oauth.js     Authorization Code + PKCE for Deluxe Docs
 
 ## On Cloudflare (Workers)
 
-The Node server above is mirrored by a Cloudflare Worker, so the drive can run on
-`*.workers.dev` with the same accounts, files, share links and Link ID.
+The drive's server runs as a Cloudflare Worker on `*.workers.dev`: accounts, files, share links and
+link IDs for Deluxe Docs.
 
 ```
-worker/index.js    entry point: serves the page, sends /api /oauth /connect /s to the Hub
-worker/hub.js      the server: accounts, files, share links, Link ID, OAuth (Durable Object, SQLite or R2)
-worker/pages.js    the sign-in and consent pages Deluxe Docs is sent to
+worker/index.js    entry point: serves the page, sends /api and /s to the Hub
+worker/hub.js      the server: accounts, files, share links, link IDs (Durable Object, SQLite or R2)
 wrangler.jsonc     bindings and settings
 .assetsignore      files that are not part of the public site
 tests/             node tests/worker.test.mjs   (runs the server code against fakes)
@@ -98,43 +96,36 @@ Set it up once:
 1. **Deploy.** Workers & Pages, your `deluxe-drive` Worker, Settings, Builds, connect this repository,
    deploy command `npx wrangler deploy`. Or run `npx wrangler deploy` yourself. Nothing else has to be
    created: accounts and files are kept in the Worker's own database, which works on a free account.
-2. **Allow Deluxe Docs.** `ALLOWED_DOCS_ORIGINS` in `wrangler.jsonc` lists the Deluxe Docs addresses that
-   may connect with a Link ID (comma separated). It already contains
-   `https://deluxe-docs.deluxelordd.workers.dev`.
-3. **Optional, for a big drive: R2.** Files are cut into 1 MB pieces in the database, which suits personal
+2. **Optional, for a big drive: R2.** Files are cut into 1 MB pieces in the database, which suits personal
    use. To keep files in R2 instead, enable R2 in the dashboard, create a bucket, and uncomment the
    `r2_buckets` entry in `wrangler.jsonc` (binding `FILES`). Nothing else changes.
 
-Accounts and files survive deploys. A single file can be up to 100 MB (the Workers request limit). The
-password check for Deluxe Docs happens in the sign-in page itself (the browser hashes the password, as the
-drive does) because Workers cap PBKDF2 at 100,000 rounds. A token given to Deluxe Docs can only read file
-lists and file contents.
+Accounts and files survive deploys. A single file can be up to 100 MB (the Workers request limit). A key given to
+Deluxe Docs can only read file lists and file contents.
 
 Tests: `node tests/worker.test.mjs` (SQLite) and `STORE=r2 node tests/worker.test.mjs` (fake R2).
 
 ## Deluxe Docs
 
-Deluxe Docs is a separate site. To connect it:
+Deluxe Docs is a separate site (`https://deluxe-docs.deluxelordd.workers.dev`). To connect it:
 
-1. Start Deluxe Drive with its server (so `/api/health` answers) at an address **other sites can
-   reach** — the preview link is private to you, so Deluxe Docs (which fetches the files from its
-   own origin) cannot use it: publish the drive (Go Live) and use that link. A static copy of the
-   drive can be pointed at such a server under **Deluxe Drive server** in the dialog below.
-2. In the drive, open the account menu (the avatar) → **Connect Deluxe Docs**.
-3. Paste the Deluxe Docs page address (`https://…`). The drive registers it as an OAuth client.
-4. Every account gets its own **Link ID** the first time the drive opens on the server — shown under
-   **Link for Deluxe Docs** in the account menu and in the Connect dialog, as
-   `https://<drive>/connect/<id>`. Copy it into Deluxe Docs' **Connect to Deluxe Drive** box: the
-   viewer reads it, registers its own page and signs in. One paste, no file to edit.
-5. Open a document in the drive. The file is shared and Deluxe Docs is opened at
-   `…?url=<share link>&name=<file name>` — `url` is the name Deluxe Docs reads, `name` sets the tab
-   title.
-6. Those links show up under **Shared links** in the account menu, where any of them can be copied
-   again or stopped for everyone.
+1. In the drive (running with its server), open the account menu (the avatar) → **Connect Deluxe Docs**.
+2. Press **Generate link ID**. A code like `62EJ-CBTD-V98W` appears and is copied.
+3. Paste it into Deluxe Docs within 60 seconds. Docs sends it to the drive, the drive finds the account
+   it belongs to, and Docs is connected: it lists that account's files and opens them.
 
-Sign-in for Deluxe Docs happens on Deluxe Drive's own pages, so the drive password is typed into
-Deluxe Drive and never sent to Deluxe Docs. A viewer token can only read (scope
-`profile drive.read`), and the drive asks which account and files to allow on the consent page.
+A link ID is 12 letters and digits (no 0, O, 1 or I, so it reads cleanly), new every time, works once,
+and runs out after 60 seconds. Making a new one ends the previous one, and the dialog makes a fresh one
+when the shown one runs out. Docs gets a key that can **only read** the file list and the files (no
+uploads, deletes, sharing or settings); it lasts 30 days, and **Disconnect** in Docs ends it. Wrong
+guesses are slowed down per address.
+
+After the first link ID, opening a document in the drive hands it to Deluxe Docs through a share link
+(`…?url=<share link>&name=<file name>`). Those links are listed under **Shared links** in the account
+menu, where they can be copied again or stopped.
+
+The Node server in `server/` still has the older connection (a permanent link plus a sign-in page). The
+Cloudflare Worker in `worker/` is the one with link IDs, and it is what the drive's page expects.
 
 ## Data notes
 
@@ -144,7 +135,7 @@ Deluxe Drive and never sent to Deluxe Docs. A viewer token can only read (scope
   could still read IndexedDB. It is not encryption at rest.
 - **With the server**, accounts and files live under `DATA_DIR` (`/data` in the image). A single
   file may be up to `MAX_UPLOAD_BYTES` (256 MB by default) and the drive refuses a larger one
-  before starting the upload. Sessions and OAuth codes are kept in memory only, so a server restart
+  before starting the upload. Sessions are kept in memory only, so a server restart
   asks everyone to sign in again. On Cloud Run the container's disk is fresh on every start, so
   mount a volume for `DATA_DIR` to keep files between runs.
 - "Erase my files" in the account menu empties the signed-in account's drive but keeps its

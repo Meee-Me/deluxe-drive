@@ -79,6 +79,35 @@ server/store.js     accounts, files, share links and sessions on disk
 server/oauth.js     Authorization Code + PKCE for Deluxe Docs
 ```
 
+## On Cloudflare (Workers + R2)
+
+The Node server above is mirrored by a Cloudflare Worker, so the drive can run on
+`*.workers.dev` with the same accounts, files, share links and Link ID.
+
+```
+worker/index.js    entry point: serves the page, sends /api /oauth /connect /s to the Hub
+worker/hub.js      the server: accounts, files, share links, Link ID, OAuth (Durable Object + R2)
+worker/pages.js    the sign-in and consent pages Deluxe Docs is sent to
+wrangler.jsonc     bindings and settings
+.assetsignore      files that are not part of the public site
+tests/             node tests/worker.test.mjs   (runs the server code against fakes)
+```
+
+Set it up once:
+
+1. **R2 bucket.** Cloudflare dashboard, Storage & databases, R2, Create bucket, named
+   `deluxe-drive-files`. (R2 asks for a payment method on file; the free allowance covers a small drive.)
+2. **Deploy.** Workers & Pages, your `deluxe-drive` Worker, Settings, Builds, connect this repository,
+   deploy command `npx wrangler deploy`. Or run `npx wrangler deploy` yourself.
+3. **Allow Deluxe Docs.** `ALLOWED_DOCS_ORIGINS` in `wrangler.jsonc` lists the Deluxe Docs addresses that
+   may connect with a Link ID (comma separated). It already contains
+   `https://deluxe-docs.deluxelordd.workers.dev`.
+
+Accounts live in the Durable Object's SQLite database and files in R2, so they survive deploys.
+A single file can be up to 100 MB (the Workers request limit). The password check for Deluxe Docs
+happens in the sign-in page itself (the browser hashes the password, as the drive does) because Workers
+cap PBKDF2 at 100,000 rounds. A token given to Deluxe Docs can only read file lists and file contents.
+
 ## Deluxe Docs
 
 Deluxe Docs is a separate site. To connect it:

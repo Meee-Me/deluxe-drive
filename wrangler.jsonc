@@ -1,0 +1,26 @@
+{
+  // Deluxe Drive: the page, plus the server that keeps accounts and files.
+  "name": "deluxe-drive",
+  "main": "worker/index.js",
+  "compatibility_date": "2025-09-01",
+
+  // The drive's own files (index.html, js/, styles.css, vendor/ ...). What is
+  // left out is listed in .assetsignore.
+  "assets": {
+    "directory": "./",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*", "/oauth/*", "/connect/*", "/s/*"]
+  },
+
+  // Accounts, file records, share links and sessions (SQLite).
+  "durable_objects": { "bindings": [{ "name": "HUB", "class_name": "Hub" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub"] }],
+
+  // File contents. Create this bucket once: Storage & databases > R2.
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "deluxe-drive-files" }],
+
+  "vars": {
+    // Pages allowed to connect with a Link ID (comma separated).
+    "ALLOWED_DOCS_ORIGINS": "https://deluxe-docs.deluxelordd.workers.dev"
+  }
+}

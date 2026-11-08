@@ -1855,13 +1855,13 @@ function showDocsDialog() {
 
   // The Deluxe Docs page this drive is usually connected to; typing over it is
   // how another address is registered.
-  const docsDefault = 'https://deluxe-docs.netlify.app';
+  const docsDefault = 'https://deluxe-docs.deluxelordd.workers.dev';
 
   const status = !online
     ? `This copy (${location.host}) is served as plain files, so it has no server of its own and keeps files in this browser. Enter the address of a Deluxe Drive server below — or open the drive from that server.`
     : settings.url
       ? `Connected to ${settings.url}. The share link needs no sign-in, and Deluxe Docs can only read the files you open.`
-      : 'Not connected yet. Paste the Deluxe Docs page address, for example https://deluxe-docs.netlify.app.';
+      : 'Not connected yet. Paste the Deluxe Docs page address, for example https://deluxe-docs.deluxelordd.workers.dev.';
 
   // Where the drive's server actually is, so it can be copied into another
   // copy of the drive or into Deluxe Docs instead of being guessed.
@@ -2071,7 +2071,7 @@ function showDocsDialog() {
     const pageUrl = urlField ? String(urlField.value || '').trim() : '';
 
     if (!pageUrl) {
-      const message = 'Type the Deluxe Docs page address, for example https://deluxe-docs.netlify.app.';
+      const message = 'Type the Deluxe Docs page address, for example https://deluxe-docs.deluxelordd.workers.dev.';
       if (statusNode) statusNode.textContent = message;
       toast(message);
       if (urlField) urlField.focus();

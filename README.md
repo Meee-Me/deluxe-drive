@@ -1,7 +1,14 @@
-# Deluxe Drive
+# Deluxe Drive (and the Deluxe server)
 
-A Google Drive–style file manager. It signs in with your **Deluxe account** from
-[Deluxe Main](https://deluxe-main.deluxelordd.workers.dev): Deluxe Drive never makes accounts.
+This repository is **the one Deluxe server** on Cloudflare (`deluxe-drive.deluxelordd.workers.dev`):
+
+- `/main/` — **Deluxe Main**, the Deluxe account: sign-in pages and, under `/main/api/`, every
+  account, sign-in and website's saved data. Copied from the Deluxe-Main repository by
+  `tools/sync-main.sh` into `main/` and `worker/main/`.
+- everything else — **Deluxe Drive**, a Google Drive–style file manager.
+
+Deluxe Drive never makes accounts: you sign in with your Deluxe account, or **continue as a guest**
+(files stay in that browser and move into your account when you sign in). Signing in is saved.
 
 - **Deluxe Main** keeps the account and everything the drive saves about your files: the folder and
   file list (names, folders, stars, trash) and settings.
@@ -61,7 +68,10 @@ js/office.js        reads .docx / .xlsx / .pptx / .odt / .ods / .odp / .rtf in t
 js/viewer.js        zoom controls, pinch / Ctrl+wheel, page box, and the all-pages PDF renderer
 js/ui.js            icons, formatting, toasts, modal dialogs
 vendor/             pinned docx-preview + JSZip (faithful .docx) and PDF.js (PDF pages) builds
-worker/index.js     entry point: serves the page, sends /api and /s to the Hub
+worker/index.js     entry point: /main to Deluxe Main, /api and /s to the Hub, the page otherwise
+worker/main/        Deluxe Main's server (copied from Deluxe-Main)
+main/               Deluxe Main's pages (copied from Deluxe-Main)
+js/db.js            this browser's storage, for guests
 worker/hub.js       the server: file contents, share links, moving old accounts to Deluxe Main
 wrangler.jsonc      bindings and settings (MAIN_URL: which Deluxe Main to trust)
 tests/              node tests/worker.test.mjs   (runs the server code against fakes)
@@ -69,11 +79,11 @@ tests/              node tests/worker.test.mjs   (runs the server code against f
 
 Set it up once:
 
-1. **Deploy Deluxe Main first** (its own repository). Deluxe Drive asks it about every key.
-2. **Deploy this.** Workers & Pages, your `deluxe-drive` Worker, Settings, Builds, connect this repository,
-   deploy command `npx wrangler deploy`. Or run `npx wrangler deploy` yourself. `MAIN_URL` in
-   `wrangler.jsonc` is the Deluxe Main address. Once both Workers are on the same account you can
-   uncomment the `MAIN` service binding, which is a little faster.
+1. **Deploy.** Workers & Pages, the `deluxe-drive` Worker, Settings, Builds, connected to this repository
+   with deploy command `npx wrangler deploy`: every push to `main` deploys Deluxe Main and Deluxe Drive
+   together. Nothing has to be created; both keep their data in the Worker's own Durable Objects.
+2. **For Deluxe Mail:** set the secret `APP_KEY_MAIL` on this Worker and add the Mail site's address
+   to `APP_ORIGINS` in `wrangler.jsonc`.
 3. **Optional, for a big drive: R2.** Files are cut into 1 MB pieces in the database, which suits personal
    use. To keep files in R2 instead, enable R2 in the dashboard, create a bucket, and uncomment the
    `r2_buckets` entry in `wrangler.jsonc` (binding `FILES`). Nothing else changes.
@@ -81,10 +91,10 @@ Set it up once:
 A single file can be up to 100 MB (the Workers request limit). Copies of the page hosted elsewhere
 (Vercel) use the drive server on Cloudflare.
 
-Tests: `node tests/worker.test.mjs` (SQLite) and `STORE=r2 node tests/worker.test.mjs` (fake R2).
-To try it locally with a local Deluxe Main: in Deluxe-Main run
-`ALLOW_LOCALHOST=1 DRIVE_URL=http://localhost:8787 node tests/dev-server.mjs 8790`, then here
-`MAIN_URL=http://localhost:8790 node tests/dev-server.mjs 8787` and open http://localhost:8787.
+Tests: `node tests/worker.test.mjs` (SQLite), `STORE=r2 node tests/worker.test.mjs` (fake R2) and
+`node --import ./tests/register.mjs tests/combined.test.mjs` (the whole Worker: Main and Drive together).
+To try everything locally: `node --import ./tests/register.mjs tests/dev-server.mjs` and open
+http://localhost:8787 (Drive) or http://localhost:8787/main/ (Deluxe Main).
 
 ## Deluxe Docs
 
@@ -104,7 +114,7 @@ account menu, where they can be copied again or stopped.
 ## Credits
 
 Directed by **Shivad Sujith**. AI support: **Claude**. Built with **FreeMilk**. Powered by
-**Netlify**. Other sites by Deluxe Lord — [Deluxe Main](https://deluxe-main.deluxelordd.workers.dev) (your Deluxe account), [YouTube Guider AI](https://youtube-guide-ai.netlify.app/),
+**Netlify**. Other sites by Deluxe Lord — [Deluxe Main](https://deluxe-drive.deluxelordd.workers.dev/main) (your Deluxe account), [YouTube Guider AI](https://youtube-guide-ai.netlify.app/),
 [Deluxe Convert](https://deluxe-convert-cloud.deluxelordd.workers.dev),
 [Deluxe Translate](https://deluxe-translate-8m27.netlify.app/). The same list is in the app: the
 **credits** link on the lock screen, or **Credits** in the account menu.

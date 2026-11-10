@@ -19,12 +19,13 @@
         <img src="icon.svg" alt="" width="56" height="56" />
       </div>
       <h1>Deluxe Drive</h1>
-      <p id="auth-sub" class="auth-sub">Deluxe Drive uses your Deluxe account. Sign in on Deluxe Main and you come straight back to your files.</p>
+      <p id="auth-sub" class="auth-sub">Sign in with your Deluxe account to keep your files everywhere, or continue as a guest and keep them in this browser.</p>
 
       <p id="auth-error" class="auth-error" role="alert"></p>
 
       <button id="auth-submit" class="btn primary block" type="submit">Sign in with Deluxe Main</button>
-      <a id="auth-create" class="link" href="https://deluxe-main.deluxelordd.workers.dev/">No account yet? Create one on Deluxe Main</a>
+      <button id="auth-guest" class="btn ghost block" type="button">Continue as guest</button>
+      <a id="auth-create" class="link" href="https://deluxe-drive.deluxelordd.workers.dev/main/">No account yet? Create one on Deluxe Main</a>
 
       <p class="auth-foot">
         <span id="auth-build">build</span>
@@ -279,6 +280,6 @@
   </script>
 
   <!-- The ?v= query busts a stale cached copy of the module between deploys. -->
-  <script type="module" src="js/app.js?v=34"></script>
+  <script type="module" src="js/app.js?v=35"></script>
 </body>
 </html>

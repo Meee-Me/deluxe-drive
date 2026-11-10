@@ -1,3 +1,4 @@
+import { db as localDb, openDB } from './db.js';
 import * as cloud from './cloud.js';
 import { icon, escapeHtml, formatBytes, formatDate, formatDateTime, showDialog, toast } from './ui.js';
 import { officeType, renderOfficePreview, renderDelimited, renderDocxFaithful } from './office.js';
@@ -6,13 +7,14 @@ import { mountPdf, mountScaled, closeViewer } from './viewer.js';
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 32';
+const BUILD = 'build 33';
 
 // The drive signs in with Deluxe Main. The folder and file list and settings
 // are saved in Deluxe Main; the file contents in the Deluxe Drive server.
-// cloud.remote hides which is which from the rest of the app.
+// cloud.remote hides which is which from the rest of the app. A guest (no
+// Deluxe account) keeps the drive in this browser instead.
 function activeStore() {
-  return cloud.remote;
+  return cloud.isGuest() ? localDb : cloud.remote;
 }
 
 const db = {
@@ -91,7 +93,7 @@ function reportCrash(message) {
 // Only errors raised by this app's own files are worth showing to the user.
 // Browser extensions (crypto wallets inject `window.ethereum`, for example)
 // throw constantly on every page, and catching those made the app look broken.
-const OUR_SCRIPTS = ['/js/app.js', '/js/ui.js', '/js/cloud.js'];
+const OUR_SCRIPTS = ['/js/app.js', '/js/ui.js', '/js/cloud.js', '/js/db.js'];
 
 function fromThisApp(text) {
   const value = String(text || '');
@@ -1636,6 +1638,8 @@ async function signOutDrive() {
   location.reload();
 }
 
+
+
 /* ------------------------------------------------------------------ */
 /* Credits                                                             */
 /* ------------------------------------------------------------------ */
@@ -1643,8 +1647,13 @@ async function signOutDrive() {
 const CREDITS_SITES = [
   {
     name: 'Deluxe Main',
-    url: 'https://deluxe-main.deluxelordd.workers.dev',
-    label: 'Your Deluxe account · deluxe-main.deluxelordd.workers.dev',
+    url: 'https://deluxe-drive.deluxelordd.workers.dev/main/',
+    label: 'Your Deluxe account',
+  },
+  {
+    name: 'Deluxe Docs',
+    url: 'https://deluxe-docs-iota.vercel.app',
+    label: 'deluxe-docs-iota.vercel.app',
   },
   {
     name: 'YouTube Guider AI',
@@ -1973,15 +1982,19 @@ function bindUI() {
     openPopup(
       event.currentTarget,
       [
-        { action: 'account', label: 'Your Deluxe account', icon: 'info' },
-        { action: 'docs', label: 'Deluxe Docs', icon: 'doc' },
+        ...(cloud.isGuest()
+          ? [{ action: 'signin', label: 'Sign in with Deluxe Main (keeps your files)', icon: 'info' }]
+          : [{ action: 'account', label: 'Your Deluxe account', icon: 'info' }, { action: 'docs', label: 'Deluxe Docs', icon: 'doc' }]),
         ...(cloud.isOnline() ? [{ action: 'shares', label: 'Shared links', icon: 'link' }] : []),
+        { action: 'sites', label: 'Deluxe websites', icon: 'link' },
         { action: 'credits', label: 'Credits', icon: 'info' },
-        { action: 'lock', label: 'Sign out', icon: 'logout' },
+        { action: 'lock', label: cloud.isGuest() ? 'Leave guest mode' : 'Sign out', icon: 'logout' },
         { action: 'reset', label: 'Erase my files', icon: 'trash', danger: true },
       ],
       (action) => {
         if (action === 'account') openAccount();
+        else if (action === 'signin') cloud.signIn();
+        else if (action === 'sites') showMoreSites();
         else if (action === 'docs') showDocsDialog();
         else if (action === 'shares') showSharesDialog();
         else if (action === 'credits') showCredits();
@@ -2166,7 +2179,7 @@ async function enterApp(user) {
   // dead buttons: the user still gets a working (empty) drive plus a toast.
   bindUI();
 
-  try {
+  if (!cloud.isGuest()) try {
     const moved = await cloud.moveOldFileList();
     if (moved) toast(`Your drive moved to your Deluxe account (${moved} items)`);
   } catch (error) {
@@ -2194,6 +2207,10 @@ async function enterApp(user) {
 // Deluxe Drive never makes accounts: the lock screen has one button, which
 // goes to Deluxe Main (where accounts are made) and comes back signed in.
 function bindAuthScreen() {
+  $('#auth-guest').addEventListener('click', () => {
+    cloud.setGuest(true);
+    enterGuest();
+  });
   $('#auth-credits').addEventListener('click', showCredits);
   $('#auth-more-sites').addEventListener('click', showMoreSites);
   $('#auth-create').href = `${cloud.mainUrl()}/connect?${new URLSearchParams({ return: location.href.replace(/#.*$/, ''), app: 'drive' })}`;
@@ -2203,6 +2220,50 @@ function bindAuthScreen() {
     $('#auth-submit').textContent = 'Opening Deluxe Main…';
     cloud.signIn();
   });
+}
+
+// Guests keep their drive in this browser (IndexedDB), with no account.
+async function enterGuest() {
+  await openDB();
+  await enterApp({ id: 'guest', name: 'Guest' });
+  toast('You are a guest: files stay in this browser. Sign in to keep them in your Deluxe account.');
+}
+
+// After signing in, files made as a guest in this browser can move into the
+// Deluxe account (folders, then file contents and records).
+async function offerGuestFiles() {
+  let nodes = [];
+  try {
+    await openDB();
+    nodes = await localDb.allNodes();
+  } catch (error) {
+    return;
+  }
+  if (!nodes.length) return;
+  const sure = await showDialog({
+    title: 'Move your guest files?',
+    message: `This browser has ${nodes.length} item${nodes.length === 1 ? '' : 's'} you added as a guest. Move them into your Deluxe account?`,
+    confirmLabel: 'Move them',
+  });
+  if (!sure) return;
+  let moved = 0;
+  try {
+    for (const node of nodes) {
+      if (node.type === 'file') {
+        const record = await localDb.getBlob(node.id);
+        if (record && record.blob) await cloud.remote.putBlob(node.id, record.blob);
+      }
+      await cloud.remote.putNode({ ...node, ownerId: state.currentUser.id });
+      await localDb.deleteNode(node.id);
+      await localDb.deleteBlob(node.id);
+      moved += 1;
+    }
+  } catch (error) {
+    toast(`Moved ${moved} of ${nodes.length}. ${error.message || 'Try again later.'}`);
+  }
+  await loadNodes();
+  render();
+  if (moved === nodes.length) toast(`Moved ${moved} item${moved === 1 ? '' : 's'} into your Deluxe account`);
 }
 
 function showAuthScreen(message) {
@@ -2221,8 +2282,9 @@ async function boot() {
     stage = 'setting up the sign-in screen';
     bindAuthScreen();
 
-    if (!cloud.isOnline()) {
-      showAuthScreen('The Deluxe Drive server could not be reached. Check your connection and reload.');
+    if (!cloud.serverFound()) {
+      if (cloud.isGuest()) return enterGuest();
+      showAuthScreen('The Deluxe server could not be reached. You can still continue as a guest.');
       $('#auth-submit').disabled = true;
       return;
     }
@@ -2235,11 +2297,14 @@ async function boot() {
       showAuthScreen(error.message);
       return;
     }
-    if (!user) {
-      showAuthScreen('');
+    if (user) {
+      await enterApp(user);
+      await offerGuestFiles();
       return;
     }
-    await enterApp(user);
+    // The guest choice is saved, so a guest goes straight back to their files.
+    if (cloud.isGuest()) return enterGuest();
+    showAuthScreen('');
   } catch (error) {
     showBootFailure(stage, error);
   }

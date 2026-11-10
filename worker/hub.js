@@ -18,7 +18,6 @@
 
 
 const SERVER_NAME = 'Deluxe Drive';
-const DEFAULT_MAIN_URL = 'https://deluxe-main.deluxelordd.workers.dev';
 const VERIFY_CACHE_MS = 60 * 1000;
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,120}$/;
 const HEX_PATTERN = /^[0-9a-fA-F]{16,128}$/;
@@ -299,7 +298,7 @@ class R2Store {
 
 export class HubCore {
   // options.verify(token) asks Deluxe Main whose a key is; the Worker passes
-  // one that uses the MAIN service binding or MAIN_URL.
+  // one that asks the Main Durable Object in the same Worker.
   constructor(sql, env, options = {}) {
     this.sql = sql;
     this.env = env || {};
@@ -628,7 +627,7 @@ export class HubCore {
     const gone = (message) => () => json(410, { error: message, code: 'moved-to-deluxe-main' });
     const accountsMoved = 'Deluxe accounts are made and managed on Deluxe Main now.';
 
-    r('GET', '/api/health', () =>
+    r('GET', '/api/health', ({ url }) =>
       json(200, {
         ok: true,
         name: SERVER_NAME,
@@ -637,7 +636,8 @@ export class HubCore {
         files: this.store.name,
         version: 'worker 3',
         accounts: 'deluxe-main',
-        main: String(this.env.MAIN_URL || DEFAULT_MAIN_URL).replace(/\/+$/, ''),
+        // Deluxe Main runs in this same Worker, under /main.
+        main: String(this.env.MAIN_URL || `${url.origin}/main`).replace(/\/+$/, ''),
         limits: { uploadBytes: this.maxUpload },
       })
     );

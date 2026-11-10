@@ -1,27 +1,38 @@
 {
-  // Deluxe Drive: the page, plus the server that keeps the files. Accounts are on Deluxe Main.
+  // The Deluxe server: Deluxe Main (accounts, sign-in, every website's data) at
+  // /main, and Deluxe Drive (its page, file contents and share links).
   "name": "deluxe-drive",
   "main": "worker/index.js",
   "compatibility_date": "2025-09-01",
-  // Lets this Worker call Deluxe Main's workers.dev address on the same account.
-  "compatibility_flags": ["global_fetch_strictly_public"],
 
   // The drive's own files (index.html, js/, styles.css, vendor/ ...). What is
   // left out is listed in .assetsignore.
   "assets": {
     "directory": "./",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*", "/s/*"]
+    "run_worker_first": ["/api/*", "/s/*", "/main/api/*"]
   },
 
-  // Deluxe Main holds the accounts and checks every sign-in key.
-  "vars": { "MAIN_URL": "https://deluxe-main.deluxelordd.workers.dev" },
-  // Optional, once both Workers are on the same Cloudflare account:
-  // "services": [{ "binding": "MAIN", "service": "deluxe-main" }],
+  // HUB: Deluxe Drive's file contents and share links. MAIN: Deluxe Main's
+  // accounts, sign-ins and saved data. Both SQLite.
+  "durable_objects": {
+    "bindings": [
+      { "name": "HUB", "class_name": "Hub" },
+      { "name": "MAIN", "class_name": "Main" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Hub"] },
+    { "tag": "v2", "new_sqlite_classes": ["Main"] }
+  ],
 
-  // File contents and share links (SQLite).
-  "durable_objects": { "bindings": [{ "name": "HUB", "class_name": "Hub" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub"] }],
+  "vars": {
+    // Extra website addresses allowed to sign in, as JSON, e.g.
+    // {"mail": ["https://deluxe-mail.vercel.app"]}
+    "APP_ORIGINS": "{}"
+  },
+  // Secrets (npx wrangler secret put NAME): APP_KEY_MAIL, the key Deluxe Mail's
+  // server uses to save mail in Deluxe Main.
 
   // File contents are kept in the Durable Object's database by default, which
   // needs nothing set up and works on a free account. For a large drive, enable

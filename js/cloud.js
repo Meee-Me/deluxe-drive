@@ -11,7 +11,8 @@
 // This module also opens documents in Deluxe Docs, which signs in with Deluxe
 // Main by itself.
 
-const DEFAULT_MAIN = 'https://deluxe-main.deluxelordd.workers.dev';
+// Deluxe Main runs inside the Deluxe Worker, under /main.
+const DEFAULT_MAIN = 'https://deluxe-drive.deluxelordd.workers.dev/main';
 const DEFAULT_SERVER = 'https://deluxe-drive.deluxelordd.workers.dev';
 // Where Deluxe Docs lives. Opening a document there passes a share link.
 export const DOCS_URL = 'https://deluxe-docs-iota.vercel.app';
@@ -62,8 +63,33 @@ export function normalizeServer(value) {
   return url.origin;
 }
 
+// Like normalizeServer, but keeps a path such as /main.
+function normalizeMain(value) {
+  const origin = normalizeServer(value);
+  if (!origin) return null;
+  try {
+    return origin + new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `https://${value}`).pathname.replace(/\/+$/, '');
+  } catch (error) {
+    return origin;
+  }
+}
+
 export function mainUrl() {
-  return state.main || normalizeServer(read(MAIN_KEY)) || DEFAULT_MAIN;
+  return state.main || normalizeMain(read(MAIN_KEY)) || DEFAULT_MAIN;
+}
+
+/* ---------------- guests ---------------- */
+
+// A guest uses the drive without an account: files stay in this browser.
+// Signing in later moves them into the Deluxe account.
+const GUEST_KEY = 'deluxe.guest';
+
+export function isGuest() {
+  return !state.session && read(GUEST_KEY) === '1';
+}
+
+export function setGuest(on) {
+  write(GUEST_KEY, on ? '1' : '');
 }
 
 /* ------------------------------------------------------------------ */
@@ -101,14 +127,20 @@ export async function detect() {
       state.base = base;
       state.server = found;
       // The drive server says which Deluxe Main it trusts; use that one.
-      if (found.main && !read(MAIN_KEY)) state.main = normalizeServer(found.main) || '';
+      if (found.main && !read(MAIN_KEY)) state.main = normalizeMain(found.main) || '';
       return found;
     }
   }
   return null;
 }
 
+// Online means the drive server answered and someone is signed in: share
+// links, Deluxe Docs and the upload limit only apply then (not to guests).
 export function isOnline() {
+  return !!state.server && !!state.session;
+}
+
+export function serverFound() {
   return !!state.server;
 }
 
@@ -155,6 +187,7 @@ export function isSignedIn() {
 // Goes to Deluxe Main, which signs the person in (or makes their account) and
 // sends them back here with a one-use code.
 export function signIn() {
+  setGuest(false);
   const back = location.href.replace(/#.*$/, '');
   location.href = `${mainUrl()}/connect?${new URLSearchParams({ return: back, app: DATA_APP })}`;
 }
@@ -167,6 +200,14 @@ export function accountPage() {
 // sure the key still works (signing out on Deluxe Main ends it).
 export async function restoreSession() {
   state.session = loadSession();
+  if (/(?:^#|&)deluxe_guest=1/.test(location.hash || '')) {
+    setGuest(true);
+    try {
+      history.replaceState(history.state, '', location.pathname + location.search);
+    } catch (error) {
+      /* nothing to tidy */
+    }
+  }
   const match = /(?:^#|&)deluxe_code=([0-9a-f]{48})/.exec(location.hash || '');
   if (match) {
     try {
@@ -183,12 +224,15 @@ export async function restoreSession() {
     const data = response ? await response.json().catch(() => ({})) : {};
     if (!response || !response.ok) throw new Error(data.error || 'Deluxe Main could not be reached. Try signing in again.');
     saveSession({ token: data.token, user: data.user, exp: Date.now() + data.expiresIn * 1000, main: mainUrl() });
+    setGuest(false);
     return state.session.user;
   }
   if (!state.session) return null;
   try {
     const me = await mainJson('/api/auth/me');
     state.session.user = me.user;
+    // Each visit renews the saved sign-in.
+    if (me.expiresIn) state.session.exp = Date.now() + me.expiresIn * 1000;
     saveSession(state.session);
   } catch (error) {
     if (error.status === 401) return null;
@@ -200,6 +244,7 @@ export async function restoreSession() {
 export async function signOut() {
   const token = state.session && state.session.token;
   saveSession(null);
+  setGuest(false);
   if (token) {
     await fetch(`${mainUrl()}/api/auth/logout`, {
       method: 'POST',

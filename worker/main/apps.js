@@ -10,6 +10,9 @@
 //            vercel.app names: anyone can make "deluxe-docs-anything".
 //   reads    other apps' data this site may read (never write)
 //   url      where the site lives, for the list on Deluxe Main's home page
+//   keyHash  SHA-256 (hex) of the key that site's own server uses to save data
+//            for its users (Authorization: App <key>). A Worker secret
+//            APP_KEY_<APP> works too.
 //
 // More origins can be added without editing this file: set the Worker variable
 // APP_ORIGINS to JSON such as {"mail": ["https://my-mail.netlify.app"]}.
@@ -73,6 +76,9 @@ export const APPS = {
     url: 'https://deluxe-mail.vercel.app',
     origins: ['https://deluxe-mail.vercel.app'],
     reads: [],
+    // SHA-256 of the key Deluxe Mail's server sends (MAIN_APP_KEY on Vercel).
+    // Only this fingerprint is here; the key itself is only on Vercel.
+    keyHash: 'f76bda7a47eb72da8133d8fda903e4334b9503644d254439cea483789e0ea976',
   },
 };
 

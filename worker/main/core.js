@@ -378,8 +378,13 @@ export class MainCore {
     const appKey = /^App\s+(.+)$/i.exec(header);
     if (appKey) {
       const app = String(request.headers.get('x-deluxe-app') || '').toLowerCase();
-      const expected = APPS[app] && app !== 'main' ? this.env[`APP_KEY_${app.toUpperCase()}`] : '';
-      if (!expected || !safeEqual(expected, appKey[1].trim())) return null;
+      if (!APPS[app] || app === 'main') return null;
+      const given = appKey[1].trim();
+      const secret = this.env[`APP_KEY_${app.toUpperCase()}`];
+      const ok = secret
+        ? safeEqual(secret, given)
+        : !!APPS[app].keyHash && given.length >= 32 && safeEqual(APPS[app].keyHash, await sha256(given));
+      if (!ok) return null;
       const account = this.accountById(request.headers.get('x-deluxe-account'));
       return { kind: 'server', app, account };
     }

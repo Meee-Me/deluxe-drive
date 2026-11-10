@@ -1,5 +1,6 @@
 {
-  // Deluxe Drive: the page, plus the server that keeps accounts and files.
+  // The Deluxe server: Deluxe Main (accounts, sign-in, every website's data) at
+  // /main, and Deluxe Drive (its page, file contents and share links).
   "name": "deluxe-drive",
   "main": "worker/index.js",
   "compatibility_date": "2025-09-01",
@@ -9,12 +10,29 @@
   "assets": {
     "directory": "./",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*", "/s/*"]
+    "run_worker_first": ["/api/*", "/s/*", "/main/api/*"]
   },
 
-  // Accounts, file records, share links and sessions (SQLite).
-  "durable_objects": { "bindings": [{ "name": "HUB", "class_name": "Hub" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub"] }],
+  // HUB: Deluxe Drive's file contents and share links. MAIN: Deluxe Main's
+  // accounts, sign-ins and saved data. Both SQLite.
+  "durable_objects": {
+    "bindings": [
+      { "name": "HUB", "class_name": "Hub" },
+      { "name": "MAIN", "class_name": "Main" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Hub"] },
+    { "tag": "v2", "new_sqlite_classes": ["Main"] }
+  ],
+
+  "vars": {
+    // Extra website addresses allowed to sign in, as JSON, e.g.
+    // {"mail": ["https://deluxe-mail.vercel.app"]}
+    "APP_ORIGINS": "{}"
+  },
+  // Secrets (npx wrangler secret put NAME): APP_KEY_MAIL, the key Deluxe Mail's
+  // server uses to save mail in Deluxe Main.
 
   // File contents are kept in the Durable Object's database by default, which
   // needs nothing set up and works on a free account. For a large drive, enable

@@ -1,6 +1,7 @@
 // IndexedDB storage for Deluxe Drive.
 // "nodes" holds file/folder metadata (small), "blobs" holds the actual file
-// contents, "settings" holds the password record. Keeping metadata apart from
+// contents, "settings" holds preferences. Used for guests (no Deluxe account):
+// their drive stays in this browser. Keeping metadata apart from
 // blobs lets the whole tree load into memory without pulling file data.
 
 const DB_NAME = 'deluxe-drive';

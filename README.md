@@ -1,17 +1,28 @@
-# Deluxe Drive
+# Deluxe Drive (and the Deluxe server)
 
-A Google Drive–style file manager. Opened as plain files, it runs entirely in the browser and
-keeps your files in this browser's IndexedDB. Started with its own server, the same page keeps
-the accounts and the files **on the server**, so the drive opens on every device and files can be
-shared — and it can hand a document to **Deluxe Docs**.
+This repository is **the one Deluxe server** on Cloudflare (`deluxe-drive.deluxelordd.workers.dev`):
+
+- `/main/` — **Deluxe Main**, the Deluxe account: sign-in pages and, under `/main/api/`, every
+  account, sign-in and website's saved data. Copied from the Deluxe-Main repository by
+  `tools/sync-main.sh` into `main/` and `worker/main/`.
+- everything else — **Deluxe Drive**, a Google Drive–style file manager.
+
+Deluxe Drive never makes accounts: you sign in with your Deluxe account, or **continue as a guest**
+(files stay in that browser and move into your account when you sign in). Signing in is saved.
+
+- **Deluxe Main** keeps the account and everything the drive saves about your files: the folder and
+  file list (names, folders, stars, trash) and settings.
+- **Deluxe Drive** (this server) keeps only the **file contents** and share links. It checks every
+  request's key with Deluxe Main.
 
 ## What it does
 
-- **Accounts and passwords** — several people can use one drive without seeing each other. Each
-  account's files are only ever loaded for that account. Only a salted PBKDF2-SHA256 hash is
-  stored, never the password, and the password is asked for **every time** the page is opened.
-  On the server, the browser hashes the password with the salt the server returns and only the
-  hash travels; the server never sees the password itself.
+- **Deluxe account** — the lock screen has one button, **Sign in with Deluxe Main**. Deluxe Main signs
+  you in (or makes your account), and sends you straight back. The account menu has **Your Deluxe
+  account** (name, password and deleting the account are managed on Deluxe Main) and **Sign out**.
+  Accounts made in Deluxe Drive before Deluxe Main existed sign in on Deluxe Main with the same name
+  and password: the account moves there, and the first visit moves its file list too. The files
+  themselves never move.
 - **Folders and files** — upload any file type (single, multiple, whole folders), create folders,
   rename, move, star, delete to trash, restore, delete forever, empty trash.
 - **Views** — My Drive with breadcrumbs, Recent, Starred, Trash, and full-name search.
@@ -33,10 +44,9 @@ shared — and it can hand a document to **Deluxe Docs**.
   that one file, with HTTP Range support so video and PDF seek. Shared files wear a link badge, and
   **Shared links** in the account menu lists every link with Copy and Stop. Deleting a file also
   removes its stored data and its link.
-- **Deluxe Docs** — *Connect Deluxe Docs* in the account menu has one button, **Generate link ID**:
-  a 60-second, one-use code that is pasted into Deluxe Docs to connect it to this account (read
-  only). Once connected, opening a document (Word, Excel, slides, PDF, text) shares it and opens it
-  in Deluxe Docs; if that fails, it opens in the built-in preview.
+- **Deluxe Docs** — Docs signs in with Deluxe Main too, and lists and opens your drive's files (read
+  only). Opening a document here shares it and opens it in Deluxe Docs (turn this off under **Deluxe
+  Docs** in the account menu); if that fails, it opens in the built-in preview.
 - **More websites** — a button in the top bar (and a link on the lock screen) opens a list of the
   other Deluxe Lord sites: YouTube Guider AI, Deluxe Convert and Deluxe Translate.
 - **Select mode** — select several items and download, star, move or delete them together, plus
@@ -46,106 +56,65 @@ shared — and it can hand a document to **Deluxe Docs**.
 
 ## Running it
 
-**As plain files.** Open `index.html` over http(s) — for example the preview link — and it works.
-`file://` will not work because ES modules and WebCrypto need a proper origin. Files stay in that
-browser, and Deluxe Docs cannot connect (it needs the server). A copy served this way can still use
-a server elsewhere: open the account menu → **Connect Deluxe Docs**, and enter its address under
-**Deluxe Drive server** — every call is sent there from then on (the server answers CORS).
-
-**With the server.** No dependencies to install: node's own `http`, `fs` and `crypto` do it.
-
-```
-node server/index.js          # listens on $PORT (8080) and 0.0.0.0
-DATA_DIR=/data node server/index.js   # keep the files somewhere specific
-```
-
-The same command serves the page, so open `http://localhost:8080`. `Dockerfile` is the image for
-that, which is how it is published: it starts the server with `node server/index.js`.
+The drive runs as a Cloudflare Worker on `*.workers.dev`: the page, plus the server for file contents
+and share links.
 
 ```
 index.html          markup for the lock screen and the app shell
 styles.css          all styling, including dark mode and mobile drawer
 js/app.js           app state, rendering, file actions, previews, uploads
-js/cloud.js         the server client: accounts, storage, share links, Deluxe Docs
+js/cloud.js         sign-in with Deluxe Main; the file list in Main, file contents in the drive server
 js/office.js        reads .docx / .xlsx / .pptx / .odt / .ods / .odp / .rtf in the browser
 js/viewer.js        zoom controls, pinch / Ctrl+wheel, page box, and the all-pages PDF renderer
-vendor/             pinned docx-preview + JSZip (faithful .docx) and PDF.js (PDF pages) builds
-js/db.js            IndexedDB layer (nodes / blobs / settings stores), used without a server
-js/auth.js          password hashing, unlock session
 js/ui.js            icons, formatting, toasts, modal dialogs
-server/index.js     HTTP server: the drive, its API, share links, OAuth endpoints
-server/store.js     accounts, files, share links and sessions on disk
-server/oauth.js     Authorization Code + PKCE for Deluxe Docs
-```
-
-## On Cloudflare (Workers)
-
-The drive's server runs as a Cloudflare Worker on `*.workers.dev`: accounts, files, share links and
-link IDs for Deluxe Docs.
-
-```
-worker/index.js    entry point: serves the page, sends /api and /s to the Hub
-worker/hub.js      the server: accounts, files, share links, link IDs (Durable Object, SQLite or R2)
-wrangler.jsonc     bindings and settings
-.assetsignore      files that are not part of the public site
-tests/             node tests/worker.test.mjs   (runs the server code against fakes)
+vendor/             pinned docx-preview + JSZip (faithful .docx) and PDF.js (PDF pages) builds
+worker/index.js     entry point: /main to Deluxe Main, /api and /s to the Hub, the page otherwise
+worker/main/        Deluxe Main's server (copied from Deluxe-Main)
+main/               Deluxe Main's pages (copied from Deluxe-Main)
+js/db.js            this browser's storage, for guests
+worker/hub.js       the server: file contents, share links, moving old accounts to Deluxe Main
+wrangler.jsonc      bindings and settings (MAIN_URL: which Deluxe Main to trust)
+tests/              node tests/worker.test.mjs   (runs the server code against fakes)
 ```
 
 Set it up once:
 
-1. **Deploy.** Workers & Pages, your `deluxe-drive` Worker, Settings, Builds, connect this repository,
-   deploy command `npx wrangler deploy`. Or run `npx wrangler deploy` yourself. Nothing else has to be
-   created: accounts and files are kept in the Worker's own database, which works on a free account.
-2. **Optional, for a big drive: R2.** Files are cut into 1 MB pieces in the database, which suits personal
+1. **Deploy.** Workers & Pages, the `deluxe-drive` Worker, Settings, Builds, connected to this repository
+   with deploy command `npx wrangler deploy`: every push to `main` deploys Deluxe Main and Deluxe Drive
+   together. Nothing has to be created; both keep their data in the Worker's own Durable Objects.
+2. **For Deluxe Mail:** set the secret `APP_KEY_MAIL` on this Worker and add the Mail site's address
+   to `APP_ORIGINS` in `wrangler.jsonc`.
+3. **Optional, for a big drive: R2.** Files are cut into 1 MB pieces in the database, which suits personal
    use. To keep files in R2 instead, enable R2 in the dashboard, create a bucket, and uncomment the
    `r2_buckets` entry in `wrangler.jsonc` (binding `FILES`). Nothing else changes.
 
-Accounts and files survive deploys. A single file can be up to 100 MB (the Workers request limit). A key given to
-Deluxe Docs can only read file lists and file contents.
+A single file can be up to 100 MB (the Workers request limit). Copies of the page hosted elsewhere
+(Vercel) use the drive server on Cloudflare.
 
-Tests: `node tests/worker.test.mjs` (SQLite) and `STORE=r2 node tests/worker.test.mjs` (fake R2).
+Tests: `node tests/worker.test.mjs` (SQLite), `STORE=r2 node tests/worker.test.mjs` (fake R2) and
+`node --import ./tests/register.mjs tests/combined.test.mjs` (the whole Worker: Main and Drive together).
+To try everything locally: `node --import ./tests/register.mjs tests/dev-server.mjs` and open
+http://localhost:8787 (Drive) or http://localhost:8787/main/ (Deluxe Main).
 
 ## Deluxe Docs
 
-Deluxe Docs is a separate site (`https://deluxe-docs.deluxelordd.workers.dev`). To connect it:
-
-1. In the drive (running with its server), open the account menu (the avatar) → **Connect Deluxe Docs**.
-2. Press **Generate link ID**. A code like `62EJ-CBTD-V98W` appears and is copied.
-3. Paste it into Deluxe Docs within 60 seconds. Docs sends it to the drive, the drive finds the account
-   it belongs to, and Docs is connected: it lists that account's files and opens them.
-
-A link ID is 12 letters and digits (no 0, O, 1 or I, so it reads cleanly), new every time, works once,
-and runs out after 60 seconds. Making a new one ends the previous one, and the dialog makes a fresh one
-when the shown one runs out. Docs gets a key that can **only read** the file list and the files (no
-uploads, deletes, sharing or settings); it lasts 30 days, and **Disconnect** in Docs ends it. Wrong
-guesses are slowed down per address.
-
-After the first link ID, opening a document in the drive hands it to Deluxe Docs through a share link
-(`…?url=<share link>&name=<file name>`). Those links are listed under **Shared links** in the account
-menu, where they can be copied again or stopped.
-
-The Node server in `server/` still has the older connection (a permanent link plus a sign-in page). The
-Cloudflare Worker in `worker/` is the one with link IDs, and it is what the drive's page expects.
+Deluxe Docs (`https://deluxe-docs-iota.vercel.app`) signs in with Deluxe Main by itself: no link ID.
+It reads the file list from Deluxe Main and the files from this server, with a key that can only read.
+Opening a document in the drive hands it to Docs through a share link
+(`…?url=<share link>&name=<file name>`); those links are listed under **Shared links** in the
+account menu, where they can be copied again or stopped.
 
 ## Data notes
 
-- **Without a server**, files are Blobs in IndexedDB: the browser's storage limit (often several
-  GB) is the only cap, each browser/device has its own accounts, and clearing site data erases
-  them all. The password protects the UI — someone with access to the device's developer tools
-  could still read IndexedDB. It is not encryption at rest.
-- **With the server**, accounts and files live under `DATA_DIR` (`/data` in the image). A single
-  file may be up to `MAX_UPLOAD_BYTES` (256 MB by default) and the drive refuses a larger one
-  before starting the upload. Sessions are kept in memory only, so a server restart
-  asks everyone to sign in again. On Cloud Run the container's disk is fresh on every start, so
-  mount a volume for `DATA_DIR` to keep files between runs.
-- "Erase my files" in the account menu empties the signed-in account's drive but keeps its
-  password; on the lock screen, "Forgot password?" erases a whole local account and its files. A
-  server account can only be erased while signed in.
+- File contents and share links are kept by this Worker (its database, or R2). Everything else, and
+  the account itself, is kept by Deluxe Main.
+- "Erase my files" in the account menu empties the drive but keeps the Deluxe account. Deleting the
+  account on Deluxe Main also deletes its files here.
 
 ## Credits
 
 Directed by **Shivad Sujith**. AI support: **Claude**. Built with **FreeMilk**. Powered by
-**Netlify**. Other sites by Deluxe Lord — [YouTube Guider AI](https://youtube-guide-ai.netlify.app/),
+**Netlify**. Other sites by Deluxe Lord — [Deluxe Main](https://deluxe-drive.deluxelordd.workers.dev/main) (your Deluxe account), [YouTube Guider AI](https://youtube-guide-ai.netlify.app/),
 [Deluxe Convert](https://deluxe-convert-cloud.deluxelordd.workers.dev),
 [Deluxe Translate](https://deluxe-translate-8m27.netlify.app/). The same list is in the app: the
 **credits** link on the lock screen, or **Credits** in the account menu.

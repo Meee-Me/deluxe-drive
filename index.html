@@ -14,34 +14,17 @@
 <body>
   <!-- Lock screen -->
   <div id="auth" class="auth">
-    <form id="auth-form" class="auth-card" autocomplete="off">
+    <form id="auth-form" class="auth-card">
       <div class="auth-logo" aria-hidden="true">
         <img src="icon.svg" alt="" width="56" height="56" />
       </div>
       <h1>Deluxe Drive</h1>
-      <p id="auth-sub" class="auth-sub">Sign in with your name and password. Each account and its files stay private.</p>
-
-      <label class="field" id="name-field">
-        <span>Your name</span>
-        <input id="auth-name" type="text" autocomplete="username" maxlength="24" placeholder="e.g. Sam" required />
-      </label>
-
-      <label class="field" id="password-field">
-        <span id="password-label">Password</span>
-        <input id="auth-password" type="password" autocomplete="current-password" required />
-      </label>
-
-      <label class="field hidden" id="pw2-field">
-        <span>Confirm password</span>
-        <input id="auth-password2" type="password" autocomplete="new-password" />
-      </label>
+      <p id="auth-sub" class="auth-sub">Deluxe Drive uses your Deluxe account. Sign in on Deluxe Main and you come straight back to your files.</p>
 
       <p id="auth-error" class="auth-error" role="alert"></p>
 
-      <button id="auth-submit" class="btn primary block" type="submit">Unlock</button>
-      <button id="auth-switch" class="link hidden" type="button">Not you? Use a different name</button>
-      <button id="auth-new" class="link" type="button">Create a new account</button>
-      <button id="auth-reset" class="link" type="button">Forgot password?</button>
+      <button id="auth-submit" class="btn primary block" type="submit">Sign in with Deluxe Main</button>
+      <a id="auth-create" class="link" href="https://deluxe-main.deluxelordd.workers.dev/">No account yet? Create one on Deluxe Main</a>
 
       <p class="auth-foot">
         <span id="auth-build">build</span>
@@ -296,6 +279,6 @@
   </script>
 
   <!-- The ?v= query busts a stale cached copy of the module between deploys. -->
-  <script type="module" src="js/app.js?v=33"></script>
+  <script type="module" src="js/app.js?v=34"></script>
 </body>
 </html>

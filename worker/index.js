@@ -1,4 +1,5 @@
-// Deluxe Drive on Cloudflare Workers.
+// Deluxe Drive on Cloudflare Workers: the file contents of every Deluxe
+// account. Accounts and everything else live in Deluxe Main.
 //
 // Static files (index.html, js/, styles.css, ...) are served by Workers
 // Assets. Everything under /api and /s goes to one Durable
@@ -8,10 +9,22 @@
 import { DurableObject } from 'cloudflare:workers';
 import { HubCore } from './hub.js';
 
+const DEFAULT_MAIN_URL = 'https://deluxe-main.deluxelordd.workers.dev';
+
+// Every key is checked with Deluxe Main, through the MAIN service binding when
+// there is one, otherwise over its address.
+function mainVerifier(env) {
+  const base = String(env.MAIN_URL || DEFAULT_MAIN_URL).replace(/\/+$/, '');
+  return (token) => {
+    const request = new Request(`${base}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+    return env.MAIN ? env.MAIN.fetch(request) : fetch(request);
+  };
+}
+
 export class Hub extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
-    this.core = new HubCore(ctx.storage.sql, env);
+    this.core = new HubCore(ctx.storage.sql, env, { verify: mainVerifier(env) });
   }
 
   fetch(request) {

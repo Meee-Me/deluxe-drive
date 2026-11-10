@@ -1,5 +1,7 @@
 // A local stand-in for the Worker, for trying the drive in a browser without
 // Cloudflare: node tests/dev-server.mjs [port]. Data is kept in memory only.
+// MAIN_URL=http://localhost:8790 points it at a local Deluxe Main
+// (Deluxe-Main: ALLOW_LOCALHOST=1 DRIVE_URL=http://localhost:8787 node tests/dev-server.mjs).
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,7 +11,10 @@ import { NodeSql } from './fakes.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const port = Number(process.argv[2] || 8787);
-const hub = new HubCore(new NodeSql(), {});
+const MAIN_URL = process.env.MAIN_URL || 'http://localhost:8790';
+const hub = new HubCore(new NodeSql(), { MAIN_URL }, {
+  verify: (token) => fetch(`${MAIN_URL}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } }),
+});
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
 
 http.createServer(async (req, res) => {

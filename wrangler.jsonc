@@ -1,8 +1,10 @@
 {
-  // Deluxe Drive: the page, plus the server that keeps accounts and files.
+  // Deluxe Drive: the page, plus the server that keeps the files. Accounts are on Deluxe Main.
   "name": "deluxe-drive",
   "main": "worker/index.js",
   "compatibility_date": "2025-09-01",
+  // Lets this Worker call Deluxe Main's workers.dev address on the same account.
+  "compatibility_flags": ["global_fetch_strictly_public"],
 
   // The drive's own files (index.html, js/, styles.css, vendor/ ...). What is
   // left out is listed in .assetsignore.
@@ -12,7 +14,12 @@
     "run_worker_first": ["/api/*", "/s/*"]
   },
 
-  // Accounts, file records, share links and sessions (SQLite).
+  // Deluxe Main holds the accounts and checks every sign-in key.
+  "vars": { "MAIN_URL": "https://deluxe-main.deluxelordd.workers.dev" },
+  // Optional, once both Workers are on the same Cloudflare account:
+  // "services": [{ "binding": "MAIN", "service": "deluxe-main" }],
+
+  // File contents and share links (SQLite).
   "durable_objects": { "bindings": [{ "name": "HUB", "class_name": "Hub" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub"] }],
 

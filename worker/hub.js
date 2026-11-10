@@ -1,27 +1,28 @@
 // The Deluxe Drive server, for Cloudflare Workers.
 //
-// The drive's own pages (js/cloud.js) talk to this, and so does Deluxe Docs:
-//   - accounts, file records and settings, share links, link ids and sessions
-//     live in the Durable Object's SQLite database (one object, so writes
-//     never race),
-//   - file contents live in the same database in 1 MB pieces, or in R2 when a
-//     bucket is bound as FILES.
+// Deluxe Drive keeps file contents, and nothing else:
+//   - accounts and sign-in belong to Deluxe Main. Every request carries a key
+//     Deluxe Main gave out, and this server asks Deluxe Main whose it is
+//     (GET /api/auth/me). No account is ever made here.
+//   - the folder and file list, settings and everything else are saved in
+//     Deluxe Main too (by the drive's page, js/cloud.js).
+//   - file contents live in the Durable Object's database in 1 MB pieces, or
+//     in R2 when a bucket is bound as FILES, along with share links.
 //
-// Deluxe Docs connects with a link id: a short code the signed-in drive makes,
-// good for 60 seconds and for one use, that Docs trades for a read-only key.
+// Accounts made here before Deluxe Main existed are handed to Deluxe Main the
+// first time their owner signs in there (/api/legacy/claim), keeping their id
+// so their files stay put; their old file list is then moved by the page.
 //
 // Nothing in here touches Node APIs. It takes a SQL handle and an env, so the
 // same code runs in the Durable Object and in the local tests.
 
 
 const SERVER_NAME = 'Deluxe Drive';
+const DEFAULT_MAIN_URL = 'https://deluxe-main.deluxelordd.workers.dev';
+const VERIFY_CACHE_MS = 60 * 1000;
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,120}$/;
 const HEX_PATTERN = /^[0-9a-fA-F]{16,128}$/;
 const SETTINGS_KEY = /^[A-Za-z0-9_.-]{1,60}$/;
-const SESSION_TTL_SECONDS = 12 * 60 * 60;
-const LINK_TTL_SECONDS = 60;
-const DOCS_SESSION_SECONDS = 30 * 24 * 60 * 60;
-const LINK_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
 
 const encoder = new TextEncoder();
@@ -297,12 +298,21 @@ class R2Store {
 /* ------------------------------------------------------------------ */
 
 export class HubCore {
-  constructor(sql, env) {
+  // options.verify(token) asks Deluxe Main whose a key is; the Worker passes
+  // one that uses the MAIN service binding or MAIN_URL.
+  constructor(sql, env, options = {}) {
     this.sql = sql;
     this.env = env || {};
     this.failures = new Map();
+    this.verified = new Map();
+    this.verifyCall = options.verify || null;
     this.store = null;
     for (const statement of SCHEMA) this.sql.exec(statement);
+    try {
+      this.sql.exec(`ALTER TABLE blobs ADD COLUMN name TEXT`);
+    } catch (error) {
+      /* already there */
+    }
     this.store = this.env.FILES ? new R2Store(this.env.FILES) : new SqlStore(this.sql);
     this.routes = [];
     this.defineRoutes();
@@ -339,7 +349,7 @@ export class HubCore {
     await this.files.deletePrefix(prefix);
   }
 
-  /* ---------------- accounts ---------------- */
+  /* ---------------- old accounts, waiting to move to Deluxe Main ---------------- */
 
   publicAccount(account) {
     return { id: account.id, name: account.name, salt: account.salt };
@@ -354,32 +364,6 @@ export class HubCore {
     const clean = String(name || '').trim().toLowerCase();
     if (!clean) return null;
     return this.one(`SELECT * FROM accounts WHERE name_lc = ?`, clean);
-  }
-
-  createAccount({ name, salt, hash }) {
-    const cleanName = String(name || '').trim().slice(0, 24);
-    const cleanSalt = String(salt || '');
-    const cleanHash = String(hash || '');
-
-    if (!cleanName) throw requestError('Type a name for the account.', 400);
-    if (!HEX_PATTERN.test(cleanSalt) || !HEX_PATTERN.test(cleanHash)) {
-      throw requestError('That account record is not valid.', 400);
-    }
-    if (this.accountByName(cleanName)) throw requestError('That name is already used on this drive.', 409, 'name-taken');
-
-    const now = Date.now();
-    const id = `u_${now.toString(36)}_${randomToken(3)}`;
-    this.run(
-      `INSERT INTO accounts (id, name, name_lc, salt, hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      id,
-      cleanName,
-      cleanName.toLowerCase(),
-      cleanSalt,
-      cleanHash,
-      now,
-      now
-    );
-    return this.accountById(id);
   }
 
   // A name nobody owns still gets a plausible looking record, so asking for it
@@ -401,36 +385,16 @@ export class HubCore {
     return { id: `u_unknown_${digest.slice(0, 16)}`, name: clean, salt: digest.slice(0, 32) };
   }
 
-  renameAccount(id, name) {
-    const clean = String(name || '').trim().slice(0, 24);
-    if (!clean) throw requestError('Type a name for the account.', 400);
-    const account = this.accountById(id);
-    if (!account) throw requestError('That account is not here.', 404);
-    const other = this.accountByName(clean);
-    if (other && other.id !== id) throw requestError('That name is already used on this drive.', 409);
-    this.run(`UPDATE accounts SET name = ?, name_lc = ?, updated_at = ? WHERE id = ?`, clean, clean.toLowerCase(), Date.now(), id);
-    return this.accountById(id);
-  }
-
-  setAccountPassword(id, salt, hash) {
-    const cleanSalt = String(salt || '');
-    const cleanHash = String(hash || '');
-    if (!HEX_PATTERN.test(cleanSalt) || !HEX_PATTERN.test(cleanHash)) {
-      throw requestError('That account record is not valid.', 400);
-    }
-    if (!this.accountById(id)) throw requestError('That account is not found.', 404);
-    this.run(`UPDATE accounts SET salt = ?, hash = ?, updated_at = ? WHERE id = ?`, cleanSalt, cleanHash, Date.now(), id);
-  }
-
-  async deleteAccount(id) {
-    if (!this.accountById(id)) return false;
-    this.run(`DELETE FROM accounts WHERE id = ?`, id);
-    for (const table of ['nodes', 'settings', 'blobs']) this.run(`DELETE FROM ${table} WHERE account_id = ?`, id);
-    this.run(`DELETE FROM shares WHERE account_id = ?`, id);
-    this.run(`DELETE FROM link_codes WHERE account_id = ?`, id);
-    this.run(`DELETE FROM sessions WHERE user_id = ?`, id);
-    await this.deleteBlobPrefix(`b/${id}/`);
-    return true;
+  // An old account hands itself to Deluxe Main: the password hash must match.
+  // The account row goes; its files, and its old file list (until the page
+  // has moved it to Deluxe Main), stay under the same id.
+  claimLegacy(name, hash) {
+    const account = this.accountByName(name);
+    if (!account || !safeEqual(account.hash, String(hash || ''))) return null;
+    this.run(`DELETE FROM accounts WHERE id = ?`, account.id);
+    this.run(`DELETE FROM sessions WHERE user_id = ?`, account.id);
+    this.run(`DELETE FROM link_codes WHERE account_id = ?`, account.id);
+    return { id: account.id, name: account.name, salt: account.salt };
   }
 
   /* Repeated wrong passwords for one name are slowed down. */
@@ -459,70 +423,16 @@ export class HubCore {
     return this.all(`SELECT json FROM nodes WHERE account_id = ?`, accountId).map((row) => JSON.parse(row.json));
   }
 
-  getNode(accountId, nodeId) {
-    if (!ID_PATTERN.test(String(nodeId || ''))) return null;
-    const row = this.one(`SELECT json FROM nodes WHERE account_id = ? AND id = ?`, accountId, nodeId);
-    return row ? JSON.parse(row.json) : null;
-  }
-
-  putNode(accountId, node) {
-    if (!node || typeof node !== 'object') throw requestError('That file record is not valid.', 400);
-    if (!ID_PATTERN.test(String(node.id || ''))) throw requestError('That file id is not valid.', 400);
-    this.run(
-      `INSERT INTO nodes (account_id, id, json) VALUES (?, ?, ?)
-       ON CONFLICT (account_id, id) DO UPDATE SET json = excluded.json`,
-      accountId,
-      node.id,
-      JSON.stringify(node)
-    );
-  }
-
-  putNodes(accountId, nodes) {
-    if (!Array.isArray(nodes)) throw requestError('That list of files is not valid.', 400);
-    for (const node of nodes) {
-      if (!node || typeof node !== 'object' || !ID_PATTERN.test(String(node.id || ''))) {
-        throw requestError('One of those file records is not valid.', 400);
-      }
-    }
-    for (const node of nodes) this.putNode(accountId, node);
-    return nodes.length;
-  }
-
-  deleteNode(accountId, nodeId) {
-    if (!ID_PATTERN.test(String(nodeId || ''))) return false;
-    this.run(`DELETE FROM nodes WHERE account_id = ? AND id = ?`, accountId, nodeId);
-    return true;
-  }
-
-  getSetting(accountId, key) {
-    const row = this.one(`SELECT json FROM settings WHERE account_id = ? AND key = ?`, accountId, key);
-    return row ? JSON.parse(row.json) : undefined;
-  }
-
-  putSetting(accountId, key, value) {
-    this.run(
-      `INSERT INTO settings (account_id, key, json) VALUES (?, ?, ?)
-       ON CONFLICT (account_id, key) DO UPDATE SET json = excluded.json`,
-      accountId,
-      key,
-      JSON.stringify(value === undefined ? null : value)
-    );
-  }
-
-  deleteSetting(accountId, key) {
-    this.run(`DELETE FROM settings WHERE account_id = ? AND key = ?`, accountId, key);
-  }
-
   /* ---------------- file contents ---------------- */
 
   blobInfo(accountId, blobId) {
-    const row = this.one(`SELECT mime, size, updated_at FROM blobs WHERE account_id = ? AND id = ?`, accountId, blobId);
+    const row = this.one(`SELECT mime, size, updated_at, name FROM blobs WHERE account_id = ? AND id = ?`, accountId, blobId);
     const key = this.blobKey(accountId, blobId);
     if (!row || !key) return null;
-    return { key, size: Number(row.size) || 0, mime: row.mime || 'application/octet-stream', updatedAt: row.updated_at };
+    return { key, size: Number(row.size) || 0, mime: row.mime || 'application/octet-stream', updatedAt: row.updated_at, name: row.name || '' };
   }
 
-  async saveBlob(accountId, blobId, request, mime) {
+  async saveBlob(accountId, blobId, request, mime, name) {
     const key = this.blobKey(accountId, blobId);
     if (!key) throw requestError('That file id is not valid.', 400);
 
@@ -540,13 +450,15 @@ export class HubCore {
 
     const size = Number(object && object.size) || 0;
     this.run(
-      `INSERT INTO blobs (account_id, id, mime, size, updated_at) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT (account_id, id) DO UPDATE SET mime = excluded.mime, size = excluded.size, updated_at = excluded.updated_at`,
+      `INSERT INTO blobs (account_id, id, mime, size, updated_at, name) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (account_id, id) DO UPDATE SET mime = excluded.mime, size = excluded.size,
+         updated_at = excluded.updated_at, name = excluded.name`,
       accountId,
       blobId,
       cleanMime,
       size,
-      Date.now()
+      Date.now(),
+      String(name || '').slice(0, 200) || null
     );
     return size;
   }
@@ -556,6 +468,7 @@ export class HubCore {
     if (!key) return false;
     await this.files.delete(key);
     this.run(`DELETE FROM blobs WHERE account_id = ? AND id = ?`, accountId, blobId);
+    this.revokeShare(accountId, blobId);
     return true;
   }
 
@@ -603,16 +516,20 @@ export class HubCore {
 
   /* ---------------- share links ---------------- */
 
-  ensureShare(accountId, blobId, name) {
+  // A name given renames the link's file; otherwise a new link takes fallback.
+  ensureShare(accountId, blobId, name, fallback = '') {
     const existing = this.one(`SELECT token FROM shares WHERE account_id = ? AND blob_id = ?`, accountId, blobId);
-    if (existing) return existing.token;
+    if (existing) {
+      if (name) this.run(`UPDATE shares SET name = ? WHERE token = ?`, String(name).slice(0, 200), existing.token);
+      return existing.token;
+    }
     const token = randomToken(16);
     this.run(
       `INSERT INTO shares (token, account_id, blob_id, name, created_at) VALUES (?, ?, ?, ?, ?)`,
       token,
       accountId,
       blobId,
-      String(name || '').slice(0, 200),
+      String(name || fallback || '').slice(0, 200),
       Date.now()
     );
     return token;
@@ -631,84 +548,38 @@ export class HubCore {
     return this.all(`SELECT * FROM shares WHERE account_id = ? ORDER BY created_at DESC`, accountId);
   }
 
-  /* ---------------- link ids for Deluxe Docs ---------------- */
+  /* ---------------- who is asking: Deluxe Main decides ---------------- */
 
-  static formatLinkId(raw) {
-    return raw.replace(/(.{4})(?=.)/g, '$1-');
-  }
-
-  static cleanLinkId(value) {
-    return String(value || '')
-      .toUpperCase()
-      .replace(/[^A-Z0-9]/g, '');
-  }
-
-  async hashLinkId(clean) {
-    return toHex(await crypto.subtle.digest('SHA-256', encoder.encode(`deluxe-link:${clean}`)));
-  }
-
-  // A new id each time, letters and digits only (no 0, O, 1 or I to misread),
-  // 12 characters. Making one ends any earlier id of the same account.
-  async createLinkId(accountId) {
-    const bytes = crypto.getRandomValues(new Uint8Array(12));
-    let raw = '';
-    for (const byte of bytes) raw += LINK_ALPHABET[byte % LINK_ALPHABET.length];
-    const now = Date.now();
-    this.run(`DELETE FROM link_codes WHERE account_id = ? OR expires_at <= ?`, accountId, now);
-    this.run(
-      `INSERT INTO link_codes (code_hash, account_id, expires_at) VALUES (?, ?, ?)`,
-      await this.hashLinkId(raw),
-      accountId,
-      now + LINK_TTL_SECONDS * 1000
-    );
-    return { linkId: HubCore.formatLinkId(raw), expiresIn: LINK_TTL_SECONDS };
-  }
-
-  // Finds the account a link id belongs to and uses the id up.
-  async takeLinkId(value) {
-    const clean = HubCore.cleanLinkId(value);
-    if (clean.length !== 12) return null;
-    const hash = await this.hashLinkId(clean);
-    const row = this.one(`SELECT account_id, expires_at FROM link_codes WHERE code_hash = ?`, hash);
-    if (!row) return null;
-    this.run(`DELETE FROM link_codes WHERE code_hash = ?`, hash);
-    if (row.expires_at <= Date.now()) return null;
-    return this.accountById(row.account_id);
-  }
-
-  /* ---------------- sessions ---------------- */
-
-  createSession(userId, options = {}) {
-    const ttlSeconds = Number(options.ttlSeconds) > 0 ? Number(options.ttlSeconds) : SESSION_TTL_SECONDS;
-    const now = Date.now();
-    this.run(`DELETE FROM sessions WHERE expires_at <= ?`, now);
-    const token = randomToken(32);
-    this.run(
-      `INSERT INTO sessions (token, user_id, client_id, scope, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
-      token,
-      userId,
-      options.clientId || null,
-      options.scope || 'drive',
-      now,
-      now + ttlSeconds * 1000
-    );
-    return { token, expiresIn: ttlSeconds };
-  }
-
-  sessionFor(token) {
+  // Asks Deluxe Main whose a key is. Answers are kept for a minute so a page
+  // full of thumbnails does not ask a hundred times.
+  async verify(token) {
     const clean = String(token || '');
-    if (!clean) return null;
-    const row = this.one(`SELECT * FROM sessions WHERE token = ?`, clean);
-    if (!row) return null;
-    if (row.expires_at <= Date.now()) {
-      this.run(`DELETE FROM sessions WHERE token = ?`, clean);
-      return null;
-    }
-    return { token: row.token, userId: row.user_id, clientId: row.client_id, scope: row.scope };
-  }
+    if (!clean || !this.verifyCall) return null;
+    const now = Date.now();
+    const cached = this.verified.get(clean);
+    if (cached && cached.until > now) return cached.who;
 
-  dropSession(token) {
-    this.run(`DELETE FROM sessions WHERE token = ?`, String(token || ''));
+    let who = null;
+    try {
+      const response = await this.verifyCall(clean);
+      if (response && response.ok) {
+        const data = await response.json();
+        if (data && data.user && ID_PATTERN.test(String(data.user.id || ''))) {
+          who = { userId: data.user.id, name: data.user.name, app: String(data.app || '') };
+        }
+      } else if (!response || response.status >= 500) {
+        throw requestError('Deluxe Main could not be reached. Try again in a moment.', 503);
+      }
+    } catch (error) {
+      if (error.status) throw error;
+      throw requestError('Deluxe Main could not be reached. Try again in a moment.', 503);
+    }
+
+    if (this.verified.size > 5000) {
+      for (const [key, value] of this.verified) if (value.until <= now) this.verified.delete(key);
+    }
+    this.verified.set(clean, { who, until: now + (who ? VERIFY_CACHE_MS : 5000) });
+    return who;
   }
 
   /* ---------------- routes ---------------- */
@@ -735,31 +606,27 @@ export class HubCore {
     return null;
   }
 
-  // Returns [session, null], or [null, a 401 response].
-  need(request) {
+  // Returns [session, null], or [null, an error response]. Deluxe Drive's own
+  // page and Deluxe Main may do everything; Deluxe Docs may only read files.
+  async need(request) {
     const token = bearerToken(request);
-    const session = token ? this.sessionFor(token) : null;
-    if (!session) return [null, json(401, { error: 'Sign in to Deluxe Drive again.', code: 'unauthorized' })];
-
-    // The key Deluxe Docs gets for a link id may read the file list and the
-    // files, and nothing else.
-    if (session.clientId) {
+    const who = token ? await this.verify(token) : null;
+    if (!who) return [null, json(401, { error: 'Sign in with Deluxe Main again.', code: 'unauthorized' })];
+    if (who.app === 'drive' || who.app === 'main') return [who, null];
+    if (who.app === 'docs') {
       const path = new URL(request.url).pathname;
       const reading = request.method === 'GET' || request.method === 'HEAD';
-      if (!reading || !/^\/api\/(db\/(nodes|blobs)(\/|$)|auth\/me$)/.test(path)) {
-        return [null, json(403, { error: 'This connection can only read documents.', code: 'read-only' })];
-      }
+      if (reading && /^\/api\/(db\/blobs\/[^/]+|auth\/me)$/.test(path)) return [who, null];
+      return [null, json(403, { error: 'This connection can only read documents.', code: 'read-only' })];
     }
-    return [session, null];
-  }
-
-  own(session, id) {
-    return session.userId === id ? null : json(403, { error: 'That is not your account.' });
+    return [null, json(403, { error: 'This website cannot use Deluxe Drive.', code: 'forbidden' })];
   }
 
   defineRoutes() {
     const r = (method, pattern, handler) => this.route(method, pattern, handler);
     const origin = (url) => url.origin;
+    const gone = (message) => () => json(410, { error: message, code: 'moved-to-deluxe-main' });
+    const accountsMoved = 'Deluxe accounts are made and managed on Deluxe Main now.';
 
     r('GET', '/api/health', () =>
       json(200, {
@@ -768,52 +635,32 @@ export class HubCore {
         server: true,
         storage: 'server',
         files: this.store.name,
-        version: 'worker 2',
-        linkIds: { create: '/api/link', redeem: '/api/link/redeem', seconds: LINK_TTL_SECONDS },
+        version: 'worker 3',
+        accounts: 'deluxe-main',
+        main: String(this.env.MAIN_URL || DEFAULT_MAIN_URL).replace(/\/+$/, ''),
         limits: { uploadBytes: this.maxUpload },
       })
     );
 
-    r('POST', '/api/auth/session', async ({ request }) => {
-      const body = await readJsonBody(request);
-      const userId = String(body.userId || '');
-      if (this.tooManyFailures(`session:${userId}`)) {
-        return json(429, { error: 'Too many wrong tries. Wait a few minutes and try again.', code: 'rate-limited' });
-      }
-      const account = this.accountById(userId);
-      if (!account || !safeEqual(account.hash, String(body.hash || ''))) {
-        this.noteFailure(`session:${userId}`);
-        return json(401, { error: 'That account did not match.', code: 'unauthorized' });
-      }
-      this.clearFailures(`session:${userId}`);
-      const session = this.createSession(account.id, { scope: 'drive', ttlSeconds: SESSION_TTL_SECONDS });
-      return json(200, { token: session.token, expiresIn: session.expiresIn, user: { id: account.id, name: account.name } });
-    });
-
-    r('GET', '/api/auth/me', ({ request }) => {
-      const [session, denied] = this.need(request);
+    r('GET', '/api/auth/me', async ({ request }) => {
+      const [who, denied] = await this.need(request);
       if (denied) return denied;
-      const account = this.accountById(session.userId);
-      if (!account) return json(401, { error: 'Sign in to Deluxe Drive again.', code: 'unauthorized' });
-      return json(200, { user: { id: account.id, name: account.name } });
+      return json(200, { user: { id: who.userId, name: who.name }, app: who.app });
     });
 
-    r('POST', '/api/accounts', async ({ request }) => {
-      const body = await readJsonBody(request);
-      let account;
-      try {
-        account = this.createAccount({ name: body.name, salt: body.salt, hash: body.hash });
-      } catch (error) {
-        const status = error.status || 500;
-        return json(status, {
-          error: error.status ? error.message : 'That account could not be made.',
-          code: error.code || (status === 409 ? 'name-taken' : 'create-failed'),
-        });
-      }
-      const session = this.createSession(account.id, { scope: 'drive', ttlSeconds: SESSION_TTL_SECONDS });
-      return json(201, { token: session.token, expiresIn: session.expiresIn, user: { id: account.id, name: account.name } });
-    });
+    // No account is ever made or changed here any more.
+    r('POST', '/api/accounts', gone(accountsMoved));
+    r('POST', '/api/auth/session', gone(accountsMoved));
+    r('PATCH', '/api/accounts/:id', gone(accountsMoved));
+    r('POST', '/api/accounts/:id/password', gone(accountsMoved));
+    r('DELETE', '/api/accounts/:id', gone(accountsMoved));
+    r('POST', '/api/link', gone('Deluxe Docs signs in with Deluxe Main now. No link ID is needed.'));
+    r('POST', '/api/link/redeem', gone('Deluxe Docs signs in with Deluxe Main now. No link ID is needed.'));
 
+    /* ---- old accounts moving to Deluxe Main (Deluxe Main calls these) ---- */
+
+    // The salt of an old account, so Deluxe Main can check its password. Unknown
+    // names get a steady fake one, as before.
     r('POST', '/api/accounts/find', async ({ request }) => {
       const body = await readJsonBody(request);
       const name = String(body.name || '').trim();
@@ -822,186 +669,118 @@ export class HubCore {
       return json(200, account ? this.publicAccount(account) : await this.fakeAccount(name));
     });
 
-    r('GET', '/api/accounts/:id', ({ params }) => {
-      const account = this.accountById(params.id);
-      if (!account) return json(404, { error: 'That account is not here.' });
-      return json(200, this.publicAccount(account));
-    });
-
-    r('PATCH', '/api/accounts/:id', async ({ request, params }) => {
-      const [session, denied] = this.need(request);
-      if (denied) return denied;
-      const notYours = this.own(session, params.id);
-      if (notYours) return notYours;
+    r('POST', '/api/legacy/exists', async ({ request }) => {
       const body = await readJsonBody(request);
-      try {
-        const account = this.renameAccount(session.userId, body.name);
-        return json(200, { user: { id: account.id, name: account.name } });
-      } catch (error) {
-        return json(error.status || 500, { error: error.message || 'That name could not be saved.' });
-      }
+      return json(200, { exists: !!this.accountByName(body.name) });
     });
 
-    r('POST', '/api/accounts/:id/password', async ({ request, params }) => {
-      const [session, denied] = this.need(request);
-      if (denied) return denied;
-      const notYours = this.own(session, params.id);
-      if (notYours) return notYours;
+    r('POST', '/api/legacy/claim', async ({ request }) => {
       const body = await readJsonBody(request);
-      const account = this.accountById(session.userId);
-      if (!account || !safeEqual(account.hash, String(body.currentHash || ''))) {
-        return json(401, { error: 'That password is not correct.', code: 'unauthorized' });
+      const key = `claim:${String(body.name || '').trim().toLowerCase()}`;
+      if (this.tooManyFailures(key)) return json(429, { error: 'Too many wrong tries. Wait a few minutes.' });
+      const moved = this.claimLegacy(body.name, body.hash);
+      if (!moved) {
+        this.noteFailure(key);
+        return json(401, { error: 'That account did not match.', code: 'unauthorized' });
       }
-      try {
-        this.setAccountPassword(session.userId, body.salt, body.hash);
-        return json(200, { ok: true });
-      } catch (error) {
-        return json(error.status || 500, { error: error.message || 'That password could not be saved.' });
-      }
+      this.clearFailures(key);
+      return json(200, moved);
     });
 
-    r('DELETE', '/api/accounts/:id', async ({ request, params }) => {
-      const [session, denied] = this.need(request);
+    // The old file list and settings of the signed-in account, for the page to
+    // move into Deluxe Main once; then /done empties them here.
+    r('GET', '/api/legacy/data', async ({ request }) => {
+      const [who, denied] = await this.need(request);
       if (denied) return denied;
-      const notYours = this.own(session, params.id);
-      if (notYours) return notYours;
-      const removed = await this.deleteAccount(session.userId);
-      if (!removed) return json(404, { error: 'That account is not here.' });
+      const settings = this.all(`SELECT key, json FROM settings WHERE account_id = ?`, who.userId).map((row) => ({
+        key: row.key,
+        value: JSON.parse(row.json),
+      }));
+      return json(200, { nodes: this.listNodes(who.userId), settings });
+    });
+
+    r('POST', '/api/legacy/data/done', async ({ request }) => {
+      const [who, denied] = await this.need(request);
+      if (denied) return denied;
+      this.run(`DELETE FROM nodes WHERE account_id = ?`, who.userId);
+      this.run(`DELETE FROM settings WHERE account_id = ?`, who.userId);
       return json(200, { ok: true });
     });
 
-    r('GET', '/api/db/nodes', ({ request }) => {
-      const [session, denied] = this.need(request);
-      if (denied) return denied;
-      return json(200, { nodes: this.listNodes(session.userId) });
-    });
-
-    r('GET', '/api/db/nodes/:id', ({ request, params }) => {
-      const [session, denied] = this.need(request);
-      if (denied) return denied;
-      const node = this.getNode(session.userId, params.id);
-      return node ? json(200, { node }) : json(404, { error: 'That file is not here.' });
-    });
-
-    r('POST', '/api/db/nodes', async ({ request }) => {
-      const [session, denied] = this.need(request);
-      if (denied) return denied;
-      const body = await readJsonBody(request);
-      try {
-        return json(200, { ok: true, count: this.putNodes(session.userId, body.nodes) });
-      } catch (error) {
-        return json(error.status || 400, { error: error.message || 'Those files could not be saved.' });
-      }
-    });
-
-    r('PUT', '/api/db/nodes/:id', async ({ request, params }) => {
-      const [session, denied] = this.need(request);
-      if (denied) return denied;
-      const body = await readJsonBody(request);
-      const node = { ...body, id: params.id };
-      try {
-        this.putNode(session.userId, node);
-        return json(200, { ok: true, id: node.id });
-      } catch (error) {
-        return json(error.status || 400, { error: error.message || 'That file could not be saved.' });
-      }
-    });
-
-    r('DELETE', '/api/db/nodes/:id', async ({ request, params }) => {
-      const [session, denied] = this.need(request);
-      if (denied) return denied;
-      // Blobs and share links are keyed by the node id, so deleting the file
-      // also ends its stored data and any link that still pointed at it.
-      this.deleteNode(session.userId, params.id);
-      await this.deleteBlob(session.userId, params.id);
-      this.revokeShare(session.userId, params.id);
-      return json(200, { ok: true });
-    });
+    /* ---- file contents ---- */
 
     r('GET', '/api/db/blobs/:id', async ({ request, params }) => {
-      const [session, denied] = this.need(request);
+      const [who, denied] = await this.need(request);
       if (denied) return denied;
-      const info = this.blobInfo(session.userId, params.id);
+      const info = this.blobInfo(who.userId, params.id);
       if (!info) return json(404, { error: 'That file has no stored data.' });
-      const node = this.getNode(session.userId, params.id);
-      return this.streamBlob(request, info, node ? node.name : params.id, false);
+      return this.streamBlob(request, info, info.name || params.id, false);
     });
 
     r('PUT', '/api/db/blobs/:id', async ({ request, params }) => {
-      const [session, denied] = this.need(request);
+      const [who, denied] = await this.need(request);
       if (denied) return denied;
       if (Number(request.headers.get('content-length') || 0) > this.maxUpload) {
         return json(413, { error: 'That file is too large for this server.' });
       }
       const mime = String(request.headers.get('x-deluxe-mime') || request.headers.get('content-type') || 'application/octet-stream');
+      const name = decodeSegment(String(request.headers.get('x-deluxe-name') || ''));
       try {
-        const size = await this.saveBlob(session.userId, params.id, request, mime);
+        const size = await this.saveBlob(who.userId, params.id, request, mime, name);
         return json(201, { ok: true, id: params.id, size, mime });
       } catch (error) {
         return json(error.status || 400, { error: error.status ? error.message : 'That file could not be stored.' });
       }
     });
 
+    // Deleting a file's contents also ends any share link to it.
     r('DELETE', '/api/db/blobs/:id', async ({ request, params }) => {
-      const [session, denied] = this.need(request);
+      const [who, denied] = await this.need(request);
       if (denied) return denied;
-      await this.deleteBlob(session.userId, params.id);
+      await this.deleteBlob(who.userId, params.id);
       return json(200, { ok: true });
     });
 
-    r('GET', '/api/db/settings/:key', ({ request, params }) => {
-      const [session, denied] = this.need(request);
-      if (denied) return denied;
-      if (!SETTINGS_KEY.test(params.key)) return json(400, { error: 'That setting name is not valid.' });
-      const value = this.getSetting(session.userId, params.key);
-      return value === undefined ? json(404, { error: 'That setting is not set.' }) : json(200, { key: params.key, value });
-    });
-
-    r('PUT', '/api/db/settings/:key', async ({ request, params }) => {
-      const [session, denied] = this.need(request);
-      if (denied) return denied;
-      if (!SETTINGS_KEY.test(params.key)) return json(400, { error: 'That setting key is not valid.' });
-      const body = await readJsonBody(request);
-      this.putSetting(session.userId, params.key, body.value);
-      return json(200, { ok: true, key: params.key });
-    });
-
-    r('DELETE', '/api/db/settings/:key', ({ request, params }) => {
-      const [session, denied] = this.need(request);
-      if (denied) return denied;
-      this.deleteSetting(session.userId, params.key);
-      return json(200, { ok: true });
-    });
-
+    // Empties the account's files here (Deluxe Main calls this when an account is deleted).
     r('POST', '/api/db/clear', async ({ request }) => {
-      const [session, denied] = this.need(request);
+      const [who, denied] = await this.need(request);
       if (denied) return denied;
-      await this.clearAccountData(session.userId);
+      await this.clearAccountData(who.userId);
       return json(200, { ok: true });
     });
 
-    r('POST', '/api/files/:id/share', ({ request, params, url }) => {
-      const [session, denied] = this.need(request);
+    r('GET', '/api/db/usage', async ({ request }) => {
+      const [who, denied] = await this.need(request);
       if (denied) return denied;
-      const node = this.getNode(session.userId, params.id);
-      if (!node) return json(404, { error: 'That file is not here.' });
-      if (node.type !== 'file') return json(400, { error: 'Folders cannot be shared on their own.' });
-      const token = this.ensureShare(session.userId, node.id, node.name);
-      return json(200, { token, path: `/s/${token}`, url: `${origin(url)}/s/${token}`, name: node.name });
+      const row = this.one(`SELECT COUNT(*) AS files, COALESCE(SUM(size), 0) AS bytes FROM blobs WHERE account_id = ?`, who.userId);
+      return json(200, { files: Number(row.files) || 0, bytes: Number(row.bytes) || 0 });
     });
 
-    r('DELETE', '/api/files/:id/share', ({ request, params }) => {
-      const [session, denied] = this.need(request);
+    /* ---- share links ---- */
+
+    r('POST', '/api/files/:id/share', async ({ request, params, url }) => {
+      const [who, denied] = await this.need(request);
       if (denied) return denied;
-      this.revokeShare(session.userId, params.id);
+      const info = this.blobInfo(who.userId, params.id);
+      if (!info) return json(404, { error: 'That file is not here.' });
+      const body = await readJsonBody(request);
+      const token = this.ensureShare(who.userId, params.id, String(body.name || '').slice(0, 200), info.name || params.id);
+      const name = this.shareByToken(token).name;
+      return json(200, { token, path: `/s/${token}`, url: `${origin(url)}/s/${token}`, name });
+    });
+
+    r('DELETE', '/api/files/:id/share', async ({ request, params }) => {
+      const [who, denied] = await this.need(request);
+      if (denied) return denied;
+      this.revokeShare(who.userId, params.id);
       return json(200, { ok: true });
     });
 
-    r('GET', '/api/files/shares', ({ request, url }) => {
-      const [session, denied] = this.need(request);
+    r('GET', '/api/files/shares', async ({ request, url }) => {
+      const [who, denied] = await this.need(request);
       if (denied) return denied;
       return json(200, {
-        shares: this.listShares(session.userId).map((share) => ({
+        shares: this.listShares(who.userId).map((share) => ({
           token: share.token,
           name: share.name,
           fileId: share.blob_id,
@@ -1013,49 +792,6 @@ export class HubCore {
     });
 
     r('GET', '/api/shared/:token', ({ request, params }) => this.serveShared(request, params.token));
-
-    r('POST', '/api/link', async ({ request }) => {
-      const [session, denied] = this.need(request);
-      if (denied) return denied;
-      if (session.clientId) return json(403, { error: 'Make a link id from Deluxe Drive itself.' });
-      return json(201, await this.createLinkId(session.userId));
-    });
-
-    // Deluxe Docs sends the pasted id here. The account is found from the id
-    // alone; what comes back is a key that can only read.
-    r('POST', '/api/link/redeem', async ({ request }) => {
-      const who = `redeem:${request.headers.get('cf-connecting-ip') || 'unknown'}`;
-      if (this.tooManyFailures(who)) {
-        return json(429, { error: 'Too many wrong link ids. Wait a few minutes and try again.', code: 'rate-limited' });
-      }
-      const body = await readJsonBody(request);
-      const account = await this.takeLinkId(body.linkId);
-      if (!account) {
-        this.noteFailure(who);
-        return json(404, {
-          error: 'This code has already been used or is too old. In Deluxe Drive, tap Generate link ID again.',
-          code: 'link-not-found',
-        });
-      }
-      const session = this.createSession(account.id, {
-        clientId: 'deluxe-docs',
-        scope: 'drive.read',
-        ttlSeconds: DOCS_SESSION_SECONDS,
-      });
-      return json(200, {
-        token: session.token,
-        expiresIn: session.expiresIn,
-        user: { id: account.id, name: account.name },
-        driveName: SERVER_NAME,
-      });
-    });
-
-    // Disconnecting Deluxe Docs ends its key.
-    r('DELETE', '/api/link/session', ({ request }) => {
-      const token = bearerToken(request);
-      if (token) this.dropSession(token);
-      return json(200, { ok: true });
-    });
   }
 
   /* ---------------- public pieces ---------------- */
@@ -1068,7 +804,7 @@ export class HubCore {
     if (!share) return text(404, 'Not found');
     const info = this.blobInfo(share.account_id, share.blob_id);
     if (!info) return text(404, 'Not found');
-    return this.streamBlob(request, info, share.name || share.blob_id, false);
+    return this.streamBlob(request, info, share.name || info.name || share.blob_id, false);
   }
 
   async handle(request) {
@@ -1092,4 +828,3 @@ export class HubCore {
   }
 }
 
-export { SESSION_TTL_SECONDS, LINK_TTL_SECONDS };

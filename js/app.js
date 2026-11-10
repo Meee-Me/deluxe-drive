@@ -1,5 +1,3 @@
-import { db as localDb, openDB } from './db.js';
-import * as auth from './auth.js';
 import * as cloud from './cloud.js';
 import { icon, escapeHtml, formatBytes, formatDate, formatDateTime, showDialog, toast } from './ui.js';
 import { officeType, renderOfficePreview, renderDelimited, renderDocxFaithful } from './office.js';
@@ -8,14 +6,13 @@ import { mountPdf, mountScaled, closeViewer } from './viewer.js';
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 31';
+const BUILD = 'build 32';
 
-// The drive keeps its files in this browser's IndexedDB, or - when the page is
-// served by the Deluxe Drive server - on that server, under the signed-in
-// account's token, so the same drive opens on every device. Both answer these
-// calls the same way, so the rest of the app never has to ask which one it is.
+// The drive signs in with Deluxe Main. The folder and file list and settings
+// are saved in Deluxe Main; the file contents in the Deluxe Drive server.
+// cloud.remote hides which is which from the rest of the app.
 function activeStore() {
-  return cloud.isOnline() ? cloud.remote : localDb;
+  return cloud.remote;
 }
 
 const db = {
@@ -94,7 +91,7 @@ function reportCrash(message) {
 // Only errors raised by this app's own files are worth showing to the user.
 // Browser extensions (crypto wallets inject `window.ethereum`, for example)
 // throw constantly on every page, and catching those made the app look broken.
-const OUR_SCRIPTS = ['/js/app.js', '/js/db.js', '/js/auth.js', '/js/ui.js', '/js/cloud.js'];
+const OUR_SCRIPTS = ['/js/app.js', '/js/ui.js', '/js/cloud.js'];
 
 function fromThisApp(text) {
   const value = String(text || '');
@@ -811,7 +808,7 @@ async function downloadNode(node) {
 // A link anyone can open, with no sign-in: the server serves that one file.
 async function shareNode(node) {
   try {
-    const share = await cloud.shareFile(node.id);
+    const share = await cloud.shareFile(node.id, node.name);
     state.shared.add(node.id);
     render();
     await copyText(share.url);
@@ -1606,112 +1603,36 @@ async function emptyTrash() {
 /* Account actions                                                     */
 /* ------------------------------------------------------------------ */
 
-async function changePasswordFlow() {
-  if (cloud.isOnline()) {
-    await changePasswordOnServer();
-    return;
-  }
-
-  const current = await showDialog({
-    title: 'Change password',
-    message: 'Enter your current password.',
-    input: '',
-    confirmLabel: 'Next',
-  });
-  if (!current) return;
-
-  let valid = false;
-  try {
-    valid = await auth.verifyUser(state.currentUser ? state.currentUser.id : '', current);
-  } catch (error) {
-    toast(error.message);
-    return;
-  }
-  if (!valid) {
-    toast('That password is not correct');
-    return;
-  }
-
-  const next = await showDialog({ title: 'New password', message: 'At least 4 characters.', input: '', confirmLabel: 'Next' });
-  if (!next) return;
-  if (next.length < 4) {
-    toast('Use at least 4 characters');
-    return;
-  }
-
-  const again = await showDialog({ title: 'Confirm new password', input: '', confirmLabel: 'Save' });
-  if (again !== next) {
-    toast('Passwords do not match');
-    return;
-  }
-
-  await auth.changePassword(state.currentUser ? state.currentUser.id : '', current, next);
-  toast('Password updated');
-}
-
-// A server account's password is checked by the server, so the new salt and
-// hash are made here and sent with the current hash as proof.
-async function changePasswordOnServer() {
-  const current = await showDialog({
-    title: 'Change password',
-    message: 'Enter your current password.',
-    input: '',
-    confirmLabel: 'Next',
-  });
-  if (!current) return;
-
-  const next = await showDialog({ title: 'New password', message: 'At least 4 characters.', input: '', confirmLabel: 'Next' });
-  if (!next) return;
-  if (next.length < 4) {
-    toast('Use at least 4 characters');
-    return;
-  }
-
-  const again = await showDialog({ title: 'Confirm new password', input: '', confirmLabel: 'Save' });
-  if (again !== next) {
-    toast('Passwords do not match');
-    return;
-  }
-
-  try {
-    const account = await cloud.accountById(state.currentUser ? state.currentUser.id : '');
-    if (!account || !account.salt) throw new Error('That account is not on the server.');
-
-    const currentHash = await auth.hashPassword(current, account.salt);
-    const salt = auth.makeSalt();
-    const hash = await auth.hashPassword(next, salt);
-
-    await cloud.changePassword({ id: state.currentUser.id, currentHash, salt, hash });
-    toast('Password updated');
-  } catch (error) {
-    toast(error.message || 'That password could not be changed');
-  }
+// The account (name, password, deleting it) is managed on Deluxe Main.
+function openAccount() {
+  window.open(cloud.accountPage(), '_blank', 'noopener');
 }
 
 async function resetDrive() {
   if (!state.currentUser) return;
 
-  const online = cloud.isOnline();
   const sure = await showDialog({
     title: 'Erase my files?',
-    message: `Every file and folder in ${state.currentUser.name}'s drive will be deleted from ${
-      online ? 'the Deluxe Drive server' : 'this device'
-    }. The account and its password stay.`,
+    message: `Every file and folder in ${state.currentUser.name}'s drive will be deleted. Your Deluxe account stays.`,
     confirmLabel: 'Erase my files',
     danger: true,
   });
   if (!sure) return;
 
-  if (online) await db.clearAll();
-  else await deleteNodesOfUser(state.currentUser.id);
+  try {
+    await db.clearAll();
+  } catch (error) {
+    toast(error.message || 'Your files could not be erased');
+    return;
+  }
 
   await loadNodes();
   render();
   toast('Your drive is empty');
 }
 
-function lockDrive() {
-  auth.forgetSession();
+async function signOutDrive() {
+  await cloud.signOut();
   location.reload();
 }
 
@@ -1720,6 +1641,11 @@ function lockDrive() {
 /* ------------------------------------------------------------------ */
 
 const CREDITS_SITES = [
+  {
+    name: 'Deluxe Main',
+    url: 'https://deluxe-main.deluxelordd.workers.dev',
+    label: 'Your Deluxe account · deluxe-main.deluxelordd.workers.dev',
+  },
   {
     name: 'YouTube Guider AI',
     url: 'https://youtube-guide-ai.netlify.app/',
@@ -1824,49 +1750,25 @@ function showCredits() {
 /* Deluxe Docs connection                                              */
 /* ------------------------------------------------------------------ */
 
-// Account menu > Connect Deluxe Docs: one button that makes a link id. The id
-// is copied, pasted into Deluxe Docs, and Docs finds this account from it. Each
-// id works once and for 60 seconds; while this stays open a fresh one replaces
-// it when it runs out.
+// Account menu > Deluxe Docs. Docs signs in with Deluxe Main by itself, so there
+// is nothing to connect: this only turns opening documents there on or off.
 function showDocsDialog() {
   const root = $('#dialog');
   if (!root) return;
-
-  const online = cloud.isOnline();
+  const settings = cloud.docsSettings();
   root.innerHTML = `
     <div class="dialog-backdrop" data-close="1"></div>
-    <div class="dialog docs-dialog" role="dialog" aria-modal="true" aria-label="Connect Deluxe Docs">
-      <h2>Connect Deluxe Docs</h2>
-      <p class="dialog-msg">${
-        online
-          ? 'Tap <b>Generate link ID</b>, then <b>Open Deluxe Docs</b>. Your files open there, nothing to copy.'
-          : 'This needs the Deluxe Drive server. Open the drive at its workers.dev address and try again.'
-      }</p>
-      <div class="link-id" id="link-id" hidden>
-        <a class="btn primary link-id-open" id="link-id-open" href="#" target="_blank" rel="noopener noreferrer">Open Deluxe Docs</a>
-        <p class="link-id-other">On another phone or computer? Open Deluxe Docs there and type:</p>
-        <button class="link-id-code" id="link-id-code" type="button" aria-label="Copy link ID"></button>
-        <p class="link-id-note" id="link-id-note" aria-live="polite"></p>
-      </div>
+    <div class="dialog docs-dialog" role="dialog" aria-modal="true" aria-label="Deluxe Docs">
+      <h2>Deluxe Docs</h2>
+      <p class="dialog-msg">Deluxe Docs uses your Deluxe account too. Open it and tap <b>Sign in with Deluxe Main</b> to see all your files there.</p>
+      <label class="docs-toggle"><input type="checkbox" id="docs-auto" ${settings.autoOpen ? 'checked' : ''}> Open documents (Word, Excel, slides, PDF) in Deluxe Docs</label>
       <div class="dialog-actions">
-        <button class="btn primary" type="button" id="link-id-make" ${online ? '' : 'disabled'}>Generate link ID</button>
+        <button class="btn ghost" type="button" data-close="1">Close</button>
+        <a class="btn primary" href="${escapeHtml(settings.url)}" target="_blank" rel="noopener">Open Deluxe Docs</a>
       </div>
     </div>`;
   root.classList.remove('hidden');
-
-  const box = root.querySelector('#link-id');
-  const codeButton = root.querySelector('#link-id-code');
-  const note = root.querySelector('#link-id-note');
-  const make = root.querySelector('#link-id-make');
-  const openDocs = root.querySelector('#link-id-open');
-  let timer = null;
-  let left = 0;
-  let copied = false;
-  let closed = false;
-
   const close = () => {
-    closed = true;
-    clearInterval(timer);
     document.removeEventListener('keydown', onKey);
     root.classList.add('hidden');
     root.innerHTML = '';
@@ -1875,60 +1777,10 @@ function showDocsDialog() {
     if (event.key === 'Escape') close();
   };
   document.addEventListener('keydown', onKey);
-  root.querySelector('[data-close]').addEventListener('click', close);
-
-  const showNote = () => {
-    note.textContent = `${copied ? 'Copied. ' : 'Tap the code to copy it. '}Works once, for ${left} more seconds.`;
-  };
-
-  const generate = async (copyIt) => {
-    make.disabled = true;
-    try {
-      const { linkId, expiresIn } = await cloud.generateLinkId();
-      if (closed) return;
-      codeButton.textContent = linkId;
-      // The code rides after # so it never reaches a server log.
-      openDocs.href = `${cloud.DOCS_URL}/#link=${encodeURIComponent(linkId)}`;
-      box.hidden = false;
-      make.textContent = 'Make a new code';
-      make.classList.remove('primary');
-      make.classList.add('ghost');
-      left = expiresIn;
-      copied = false;
-      if (copyIt) {
-        try {
-          copied = await copyText(linkId);
-        } catch (error) {
-          copied = false;
-        }
-        if (copied) toast('Link ID copied');
-      }
-      showNote();
-      clearInterval(timer);
-      timer = setInterval(() => {
-        left -= 1;
-        if (left <= 0) {
-          clearInterval(timer);
-          note.textContent = 'That code ran out. Making a new one…';
-          generate(false);
-          return;
-        }
-        showNote();
-      }, 1000);
-    } catch (error) {
-      if (!closed) toast(error.message || 'Could not make a link ID');
-    } finally {
-      if (!closed) make.disabled = !cloud.isOnline();
-    }
-  };
-
-  make.addEventListener('click', () => generate(true));
-  // Once Docs opens, the code is used up; close this so it is not reused.
-  openDocs.addEventListener('click', () => setTimeout(close, 300));
-  codeButton.addEventListener('click', async () => {
-    copied = await copyText(codeButton.textContent);
-    showNote();
-    toast('Link ID copied');
+  root.querySelectorAll('[data-close]').forEach((node) => node.addEventListener('click', close));
+  root.querySelector('#docs-auto').addEventListener('change', (event) => {
+    cloud.saveDocsSettings({ ...cloud.docsSettings(), autoOpen: event.target.checked });
+    toast(event.target.checked ? 'Documents open in Deluxe Docs' : 'Documents open here');
   });
 }
 
@@ -2121,19 +1973,19 @@ function bindUI() {
     openPopup(
       event.currentTarget,
       [
-        { action: 'password', label: 'Change password', icon: 'lock' },
-        { action: 'docs', label: 'Connect Deluxe Docs', icon: 'doc' },
+        { action: 'account', label: 'Your Deluxe account', icon: 'info' },
+        { action: 'docs', label: 'Deluxe Docs', icon: 'doc' },
         ...(cloud.isOnline() ? [{ action: 'shares', label: 'Shared links', icon: 'link' }] : []),
         { action: 'credits', label: 'Credits', icon: 'info' },
-        { action: 'lock', label: 'Lock drive', icon: 'logout' },
+        { action: 'lock', label: 'Sign out', icon: 'logout' },
         { action: 'reset', label: 'Erase my files', icon: 'trash', danger: true },
       ],
       (action) => {
-        if (action === 'password') changePasswordFlow();
+        if (action === 'account') openAccount();
         else if (action === 'docs') showDocsDialog();
         else if (action === 'shares') showSharesDialog();
         else if (action === 'credits') showCredits();
-        else if (action === 'lock') lockDrive();
+        else if (action === 'lock') signOutDrive();
         else if (action === 'reset') resetDrive();
       }
     );
@@ -2303,11 +2155,6 @@ async function enterApp(user) {
   state.folderId = null;
   state.query = '';
   state.nodes = new Map();
-  auth.forgetSession();
-
-  // Next time this browser opens the drive, offer this account (and only
-  // this account) by name; the password is still required every visit.
-  if (user && user.id) rememberUser(user);
 
   $('#auth').classList.add('hidden');
   $('#app').classList.remove('hidden');
@@ -2318,6 +2165,14 @@ async function enterApp(user) {
   // Wire the UI first, so a storage hiccup can never leave the app with
   // dead buttons: the user still gets a working (empty) drive plus a toast.
   bindUI();
+
+  try {
+    const moved = await cloud.moveOldFileList();
+    if (moved) toast(`Your drive moved to your Deluxe account (${moved} items)`);
+  } catch (error) {
+    console.error('Could not move the old file list', error);
+    toast('Your older files could not be moved yet. Reload to try again.');
+  }
 
   try {
     await loadNodes();
@@ -2332,389 +2187,59 @@ async function enterApp(user) {
   render();
 }
 
-// Files from the old single-account version have no owner yet. Only the
-// account carried over from that version may claim them.
-async function adoptOwnerlessNodes(userId) {
-  if (userId !== 'u_legacy') return;
-
-  const all = await db.allNodes();
-  const orphans = all.filter((node) => !node.ownerId);
-  for (const node of orphans) {
-    node.ownerId = userId;
-    await db.putNode(node);
-  }
-}
-
-async function deleteNodesOfUser(userId) {
-  const all = await db.allNodes();
-  const mine = all.filter((node) => node.ownerId === userId);
-
-  for (const node of mine) {
-    await db.deleteNode(node.id);
-    await db.deleteBlob(node.id);
-    const url = objUrls.get(node.id);
-    if (url) {
-      URL.revokeObjectURL(url);
-      objUrls.delete(node.id);
-    }
-  }
-}
-
 /* ------------------------------------------------------------------ */
-/* Accounts on this device                                             */
+/* Signing in with Deluxe Main                                         */
 /* ------------------------------------------------------------------ */
 
-let authUsers = [];
-let authMode = 'sign_in'; // sign_in | create
-let authHintId = null; // the account last used in this browser
-
-const LAST_USER_KEY = 'dd.lastUser';
-const LAST_NAME_KEY = 'dd.lastName';
-
-function readLastUser() {
-  try {
-    return localStorage.getItem(LAST_USER_KEY);
-  } catch (error) {
-    return null;
-  }
-}
-
-function readLastName() {
-  try {
-    return localStorage.getItem(LAST_NAME_KEY);
-  } catch (error) {
-    return null;
-  }
-}
-
-function rememberUser(user) {
-  if (!user) return;
-  try {
-    if (user.id) localStorage.setItem(LAST_USER_KEY, user.id);
-    if (user.name) localStorage.setItem(LAST_NAME_KEY, user.name);
-  } catch (error) {
-    /* storage can be blocked; the drive still works */
-  }
-}
-
-async function initAuthScreen() {
-  const buildNode = $('#auth-build');
-  if (buildNode) buildNode.textContent = BUILD;
-
-  if (cloud.isOnline()) {
-    // The server never hands out a list of its accounts: only the name last
-    // used in this browser is offered again, typed in by the person.
-    authUsers = [];
-    authHintId = null;
-    authMode = readLastName() ? 'sign_in' : 'create';
-    renderAuthScreen();
-    return;
-  }
-
-  authUsers = await auth.listUsers();
-
-  // Only the account last used in this browser is offered by name; every other
-  // account stays invisible. A first visit, or a cleared browser, gets the
-  // plain "name + password" form.
-  const last = readLastUser();
-  const hinted = last ? authUsers.find((user) => user.id === last) || null : null;
-  authHintId = hinted ? hinted.id : null;
-
-  authMode = authUsers.length ? 'sign_in' : 'create';
-  renderAuthScreen();
-}
-
-// With a server, the accounts are not listed anywhere: the name last used in
-// this browser is offered again, and checked there by the server.
-function renderServerAuthScreen() {
-  const creating = authMode === 'create';
-  const lastName = readLastName();
-
-  $('#name-field').classList.remove('hidden');
-  const nameField = $('#auth-name');
-  if (!nameField.value) nameField.value = lastName || '';
-
-  $('#auth-password').value = '';
-  $('#auth-password2').value = '';
-  $('#auth-error').textContent = '';
-
-  $('#password-label').textContent = creating ? 'Choose a password' : 'Password';
-  $('#pw2-field').classList.toggle('hidden', !creating);
-  $('#auth-submit').textContent = creating ? 'Create account' : 'Unlock';
-
-  $('#auth-sub').textContent = creating
-    ? 'Create an account on the Deluxe Drive server. Its files open on every device you sign in on.'
-    : lastName
-      ? `Welcome back, ${lastName}. Sign in to open your drive from the Deluxe Drive server.`
-      : 'Sign in with your name and password. Your drive is kept on the Deluxe Drive server.';
-
-  $('#auth-switch').classList.add('hidden');
-  $('#auth-new').classList.remove('hidden');
-  $('#auth-new').textContent = creating ? 'Sign in to an existing account' : 'Create a new account';
-  $('#auth-reset').classList.remove('hidden');
-
-  if (creating) $('#auth-name').focus();
-  else $('#auth-password').focus();
-}
-
-function renderAuthScreen() {
-  if (cloud.isOnline()) {
-    renderServerAuthScreen();
-    return;
-  }
-
-  const creating = authMode === 'create';
-  const hinted = authHintId ? authUsers.find((user) => user.id === authHintId) || null : null;
-  const newButton = $('#auth-new');
-  const resetButton = $('#auth-reset');
-  const switchButton = $('#auth-switch');
-
-  const showName = creating || !hinted;
-  $('#name-field').classList.toggle('hidden', !showName);
-  $('#auth-name').value = hinted && !creating ? hinted.name : '';
-  $('#auth-password').value = '';
-  $('#auth-password2').value = '';
-  $('#auth-error').textContent = '';
-
-  $('#password-label').textContent = creating ? 'Choose a password' : 'Password';
-  $('#pw2-field').classList.toggle('hidden', !creating);
-  $('#auth-submit').textContent = creating ? 'Create account' : 'Unlock';
-
-  $('#auth-sub').textContent = creating
-    ? 'Create your own account. Nobody else on this device can see it or its files.'
-    : hinted
-      ? `Welcome back, ${hinted.name}. Enter your password to open your drive.`
-      : 'Sign in with your name and password. Each account and its files stay private.';
-
-  switchButton.classList.toggle('hidden', !hinted);
-  switchButton.textContent = hinted ? `Not ${hinted.name}? Use a different name` : 'Use a different name';
-
-  newButton.textContent = creating ? 'Sign in to an existing account' : 'Create a new account';
-  newButton.classList.toggle('hidden', creating && !authUsers.length);
-  resetButton.classList.toggle('hidden', creating);
-
-  if (hinted && !creating) $('#auth-password').focus();
-  else $('#auth-name').focus();
-}
-
+// Deluxe Drive never makes accounts: the lock screen has one button, which
+// goes to Deluxe Main (where accounts are made) and comes back signed in.
 function bindAuthScreen() {
   $('#auth-credits').addEventListener('click', showCredits);
   $('#auth-more-sites').addEventListener('click', showMoreSites);
-
-  $('#auth-switch').addEventListener('click', () => {
-    authHintId = null;
-    try {
-      localStorage.removeItem(LAST_USER_KEY);
-    } catch (error) {
-      /* nothing to clear */
-    }
-    renderAuthScreen();
-  });
-
-  $('#auth-new').addEventListener('click', () => {
-    authMode = authMode === 'create' ? 'sign_in' : 'create';
-    renderAuthScreen();
-  });
-
-  $('#auth-reset').addEventListener('click', async () => {
-    if (cloud.isOnline()) {
-      await showDialog({
-        title: 'Accounts live on the server',
-        message:
-          'A Deluxe Drive server account can only be erased while signed in: unlock it, then use Erase my files, or ask whoever runs the server.',
-        confirmLabel: 'OK',
-        cancelLabel: '',
-      });
-      return;
-    }
-
-    const typed = $('#auth-name').value.trim();
-    const user = typed
-      ? authUsers.find((entry) => entry.name.toLowerCase() === typed.toLowerCase())
-      : null;
-
-    if (!user) {
-      $('#auth-error').textContent = typed
-        ? 'There is no account with that name on this device.'
-        : 'Type your account name above first, then tap Forgot password.';
-      $('#auth-name').focus();
-      return;
-    }
-
-    const sure = await showDialog({
-      title: `Erase the account “${user.name}”?`,
-      message:
-        'This deletes that account and every file in it from this device. A forgotten password cannot be recovered.',
-      confirmLabel: 'Erase account',
-      danger: true,
-    });
-    if (!sure) return;
-
-    await deleteNodesOfUser(user.id);
-    await auth.removeUser(user.id);
-    await initAuthScreen();
-    toast(`The account “${user.name}” was erased`);
-  });
-
-  $('#auth-form').addEventListener('submit', async (event) => {
+  $('#auth-create').href = `${cloud.mainUrl()}/connect?${new URLSearchParams({ return: location.href.replace(/#.*$/, ''), app: 'drive' })}`;
+  $('#auth-form').addEventListener('submit', (event) => {
     event.preventDefault();
-
-    const error = $('#auth-error');
-    const submit = $('#auth-submit');
-    const name = $('#auth-name').value.trim();
-    const password = $('#auth-password').value;
-    error.textContent = '';
-
-    if (!name) {
-      error.textContent = 'Type your name.';
-      $('#auth-name').focus();
-      return;
-    }
-
-    // On the server the password is hashed here with the salt it returns, and
-    // only that hash travels; the server never sees the password itself.
-    if (cloud.isOnline()) {
-      if (authMode === 'create') {
-        const confirmPassword = $('#auth-password2').value;
-
-        if (name.length < 2) {
-          error.textContent = 'That name is too short.';
-          return;
-        }
-        if (password.length < 4) {
-          error.textContent = 'Use at least 4 characters.';
-          return;
-        }
-        if (password !== confirmPassword) {
-          error.textContent = 'Passwords do not match.';
-          return;
-        }
-
-        submit.disabled = true;
-        try {
-          const salt = auth.makeSalt();
-          const hash = await auth.hashPassword(password, salt);
-          const user = await cloud.createAccount({ name, salt, hash });
-          submit.disabled = false;
-          await enterApp(user);
-          toast(`Welcome, ${user.name}`);
-        } catch (error_) {
-          submit.disabled = false;
-          error.textContent = error_.message || 'Could not create the account.';
-        }
-        return;
-      }
-
-      submit.disabled = true;
-      try {
-        const record = await cloud.findAccount(name);
-        const hash = await auth.hashPassword(password, record.salt);
-        const user = await cloud.startSession({ id: record.id, name: record.name, hash });
-        submit.disabled = false;
-        await enterApp(user);
-      } catch (error_) {
-        submit.disabled = false;
-        error.textContent = "That name and password don't match an account on this server.";
-        $('#auth-password').select();
-      }
-      return;
-    }
-
-    if (authMode === 'create') {
-      const confirmPassword = $('#auth-password2').value;
-
-      if (name.length < 2) {
-        error.textContent = 'That name is too short.';
-        return;
-      }
-      if (password.length < 4) {
-        error.textContent = 'Use at least 4 characters.';
-        return;
-      }
-      if (password !== confirmPassword) {
-        error.textContent = 'Passwords do not match.';
-        return;
-      }
-
-      submit.disabled = true;
-      try {
-        const user = await auth.createUser(name, password);
-        await adoptOwnerlessNodes(user.id);
-        submit.disabled = false;
-        await enterApp(user);
-        toast(`Welcome, ${user.name}`);
-      } catch (error_) {
-        submit.disabled = false;
-        error.textContent = error_.message || 'Could not create the account.';
-      }
-      return;
-    }
-
-    const user = authUsers.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
-
-    // The same message whether the name is unknown or the password is wrong,
-    // so this screen cannot be used to find out who has an account here.
-    const genericError = "That name and password don't match an account on this device.";
-
-    if (!user) {
-      error.textContent = genericError;
-      return;
-    }
-
-    submit.disabled = true;
-    try {
-      const ok = await auth.verifyUser(user.id, password);
-      submit.disabled = false;
-      if (!ok) {
-        error.textContent = genericError;
-        $('#auth-password').select();
-        return;
-      }
-      await adoptOwnerlessNodes(user.id);
-      await enterApp(user);
-    } catch (error_) {
-      submit.disabled = false;
-      error.textContent = error_.message || 'Could not unlock the drive.';
-    }
-  });
-
-  // Clear a previous error as soon as the user starts correcting the input.
-  ['#auth-password', '#auth-password2', '#auth-name'].forEach((selector) => {
-    const field = $(selector);
-    if (!field) return;
-    field.addEventListener('input', () => {
-      const error = $('#auth-error');
-      if (error) error.textContent = '';
-    });
+    $('#auth-submit').disabled = true;
+    $('#auth-submit').textContent = 'Opening Deluxe Main…';
+    cloud.signIn();
   });
 }
 
+function showAuthScreen(message) {
+  const buildNode = $('#auth-build');
+  if (buildNode) buildNode.textContent = BUILD;
+  $('#auth-error').textContent = message || '';
+  $('#auth').classList.remove('hidden');
+  $('#auth-submit').focus();
+}
+
 async function boot() {
-  // Served by the Deluxe Drive server, the drive keeps its accounts and files
-  // there. Served as plain files, /api/health is not there, this answers null,
-  // and the browser's own storage is used exactly as before.
+  let stage = 'finding the Deluxe Drive server';
   try {
     await cloud.detect();
-  } catch (error) {
-    /* no server: the browser's own storage is used */
-  }
 
-  // Each step is named, so a failure says where it stopped instead of
-  // surfacing the browser's unhelpful "Script error".
-  let stage = 'opening the drive database';
-
-  try {
-    if (!cloud.isOnline()) await openDB();
-
-    stage = 'reading the accounts on this device';
-    if (!cloud.isOnline()) await auth.migrateLegacyAccount();
-    auth.forgetSession();
-
-    stage = 'setting up the account screen';
+    stage = 'setting up the sign-in screen';
     bindAuthScreen();
 
-    stage = 'showing the accounts';
-    await initAuthScreen();
+    if (!cloud.isOnline()) {
+      showAuthScreen('The Deluxe Drive server could not be reached. Check your connection and reload.');
+      $('#auth-submit').disabled = true;
+      return;
+    }
+
+    stage = 'signing in with Deluxe Main';
+    let user = null;
+    try {
+      user = await cloud.restoreSession();
+    } catch (error) {
+      showAuthScreen(error.message);
+      return;
+    }
+    if (!user) {
+      showAuthScreen('');
+      return;
+    }
+    await enterApp(user);
   } catch (error) {
     showBootFailure(stage, error);
   }

@@ -1,43 +1,49 @@
-// The Deluxe Drive server, from the browser's side.
+// Deluxe Drive, from the browser's side.
 //
-// When the page is served by the drive's own server (/api/health answers),
-// the drive keeps its accounts and files there instead of in this browser's
-// IndexedDB, so the same drive opens on another device and files can be
-// shared. Served as plain files somewhere else (Netlify, GitHub Pages), every
-// call here fails quietly and the drive keeps working exactly as before.
+// Two servers, one sign-in:
+//   - Deluxe Main owns the account. "Sign in with Deluxe Main" sends the page
+//     there and back; Main hands this page a key for the account. The folder
+//     and file list and the drive's settings are saved in Deluxe Main too.
+//   - The Deluxe Drive server keeps the file contents and share links. It
+//     accepts the same key, after checking it with Deluxe Main.
+// No account is ever made in Deluxe Drive.
 //
-// This module also holds the Deluxe Docs connection: connecting a viewer,
-// making a share link for a file, and opening that file in the viewer.
+// This module also opens documents in Deluxe Docs, which signs in with Deluxe
+// Main by itself.
 
-import { db as localDb } from './db.js';
-
-const DOCS_KEY = 'dd.docs';
-// Where Deluxe Docs lives. A link id made here is pasted there.
-export const DOCS_URL = 'https://deluxe-docs-iota.vercel.app';
-// The drive's server runs on Cloudflare. Copies of the page hosted on Vercel
-// use it, so accounts and files are the same wherever the drive is opened.
+const DEFAULT_MAIN = 'https://deluxe-main.deluxelordd.workers.dev';
 const DEFAULT_SERVER = 'https://deluxe-drive.deluxelordd.workers.dev';
-const DOCS_DEFAULTS = { url: '', autoOpen: true };
+// Where Deluxe Docs lives. Opening a document there passes a share link.
+export const DOCS_URL = 'https://deluxe-docs-iota.vercel.app';
+
+const SESSION_KEY = 'dd.main.session';
 const SERVER_KEY = 'dd.server';
+const MAIN_KEY = 'dd.main.url';
+const DOCS_KEY = 'dd.docs';
+const DOCS_DEFAULTS = { url: DOCS_URL, autoOpen: true };
+const DATA_APP = 'drive';
 
 const state = {
   server: null,
   base: '',
-  token: null,
-  user: null,
+  main: '',
+  session: null,
 };
 
-/* ------------------------------------------------------------------ */
-/* Which server, if any                                                */
-/* ------------------------------------------------------------------ */
-
-// A copy served as plain files (Netlify, GitHub Pages) has no server of its
-// own. It can still work, by being told where a Deluxe Drive server lives.
-export function savedServer() {
+function read(key) {
   try {
-    return localStorage.getItem(SERVER_KEY) || '';
+    return localStorage.getItem(key) || '';
   } catch (error) {
     return '';
+  }
+}
+
+function write(key, value) {
+  try {
+    if (value) localStorage.setItem(key, value);
+    else localStorage.removeItem(key);
+  } catch (error) {
+    /* storage can be blocked; this visit still works */
   }
 }
 
@@ -45,46 +51,25 @@ export function normalizeServer(value) {
   let raw = String(value || '').trim();
   if (!raw) return null;
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) raw = `https://${raw.replace(/^\/+/, '')}`;
-
   let url;
   try {
     url = new URL(raw);
   } catch (error) {
     return null;
   }
-
   const local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(url.hostname);
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) return null;
   return url.origin;
 }
 
-export function setServer(value) {
-  const origin = normalizeServer(value);
-  if (!origin) return null;
-  try {
-    localStorage.setItem(SERVER_KEY, origin);
-  } catch (error) {
-    /* storage can be blocked; the drive still asks the same origin */
-  }
-  return origin;
-}
-
-export function clearServer() {
-  try {
-    localStorage.removeItem(SERVER_KEY);
-  } catch (error) {
-    /* nothing stored anyway */
-  }
+export function mainUrl() {
+  return state.main || normalizeServer(read(MAIN_KEY)) || DEFAULT_MAIN;
 }
 
 /* ------------------------------------------------------------------ */
-/* Talking to the server                                               */
+/* Which Deluxe Drive server                                           */
 /* ------------------------------------------------------------------ */
 
-// One question to a Deluxe Drive server: this page's own, or the one a static
-// copy was given. A cookie-gated host (a private preview) only answers when the
-// page's own cookies go along, so this never sends a bare, credential-less one:
-// that gets the host's HTML gate instead of JSON, which reads as "no server".
 async function probeAt(base) {
   try {
     const response = await fetch(`${base}/api/health`, {
@@ -93,7 +78,6 @@ async function probeAt(base) {
       credentials: 'same-origin',
     });
     if (!response.ok) return null;
-
     const data = await response.json();
     if (!data || data.ok !== true || data.server !== true) return null;
     return data;
@@ -102,38 +86,26 @@ async function probeAt(base) {
   }
 }
 
-async function probe() {
-  // The page's own origin first: served by the server, that is the server.
-  // Only then the address a static copy was given, if it is another one.
+// The page's own origin first (served by the drive's Worker, that is the
+// server), then an address saved earlier, then the drive on Cloudflare.
+export async function detect() {
+  if (state.server) return state.server;
   const bases = [''];
-  const saved = savedServer();
+  const saved = normalizeServer(read(SERVER_KEY));
   if (saved && saved !== location.origin) bases.push(saved);
-  if (/\.vercel\.app$/i.test(location.hostname) && !bases.includes(DEFAULT_SERVER)) bases.push(DEFAULT_SERVER);
+  if (!bases.includes(DEFAULT_SERVER) && location.origin !== DEFAULT_SERVER) bases.push(DEFAULT_SERVER);
 
   for (const base of bases) {
     const found = await probeAt(base);
     if (found) {
       state.base = base;
+      state.server = found;
+      // The drive server says which Deluxe Main it trusts; use that one.
+      if (found.main && !read(MAIN_KEY)) state.main = normalizeServer(found.main) || '';
       return found;
     }
   }
-
   return null;
-}
-
-export async function detect() {
-  if (state.server) return state.server;
-
-  const found = await probe();
-  if (found) state.server = found;
-  return found;
-}
-
-// Ask again, for a copy whose first check ran before the server answered.
-export async function refreshServer() {
-  const found = await probe();
-  if (found) state.server = found;
-  return state.server || null;
 }
 
 export function isOnline() {
@@ -144,254 +116,258 @@ export function serverInfo() {
   return state.server;
 }
 
-// The address of the server in use: this page's own origin when it is served
-// by the server, or the one a static copy was pointed at.
 export function serverAddress() {
   return state.base || location.origin;
 }
 
-export function isSignedIn() {
-  return !!state.token;
+export function uploadLimit() {
+  const value = state.server && state.server.limits && Number(state.server.limits.uploadBytes);
+  return value > 0 ? value : 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Signing in with Deluxe Main                                         */
+/* ------------------------------------------------------------------ */
+
+function loadSession() {
+  try {
+    const value = JSON.parse(read(SESSION_KEY) || 'null');
+    if (value && value.token && value.exp > Date.now() && value.main === mainUrl()) return value;
+  } catch (error) {
+    /* nothing usable */
+  }
+  return null;
+}
+
+function saveSession(value) {
+  state.session = value;
+  write(SESSION_KEY, value ? JSON.stringify(value) : '');
 }
 
 export function currentUser() {
-  return state.user;
+  return state.session ? state.session.user : null;
 }
 
-async function request(path, options = {}) {
-  const headers = { ...(options.headers || {}) };
-  if (state.token) headers.Authorization = `Bearer ${state.token}`;
+export function isSignedIn() {
+  return !!state.session;
+}
 
+// Goes to Deluxe Main, which signs the person in (or makes their account) and
+// sends them back here with a one-use code.
+export function signIn() {
+  const back = location.href.replace(/#.*$/, '');
+  location.href = `${mainUrl()}/connect?${new URLSearchParams({ return: back, app: DATA_APP })}`;
+}
+
+export function accountPage() {
+  return `${mainUrl()}/`;
+}
+
+// Back from Deluxe Main: trade #deluxe_code=... for this page's key. Then make
+// sure the key still works (signing out on Deluxe Main ends it).
+export async function restoreSession() {
+  state.session = loadSession();
+  const match = /(?:^#|&)deluxe_code=([0-9a-f]{48})/.exec(location.hash || '');
+  if (match) {
+    try {
+      history.replaceState(history.state, '', location.pathname + location.search);
+    } catch (error) {
+      /* the code is used up anyway */
+    }
+    const response = await fetch(`${mainUrl()}/api/connect/exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: match[1] }),
+      credentials: 'omit',
+    }).catch(() => null);
+    const data = response ? await response.json().catch(() => ({})) : {};
+    if (!response || !response.ok) throw new Error(data.error || 'Deluxe Main could not be reached. Try signing in again.');
+    saveSession({ token: data.token, user: data.user, exp: Date.now() + data.expiresIn * 1000, main: mainUrl() });
+    return state.session.user;
+  }
+  if (!state.session) return null;
+  try {
+    const me = await mainJson('/api/auth/me');
+    state.session.user = me.user;
+    saveSession(state.session);
+  } catch (error) {
+    if (error.status === 401) return null;
+    // Main unreachable for a moment: keep the key and try to carry on.
+  }
+  return state.session ? state.session.user : null;
+}
+
+export async function signOut() {
+  const token = state.session && state.session.token;
+  saveSession(null);
+  if (token) {
+    await fetch(`${mainUrl()}/api/auth/logout`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      credentials: 'omit',
+    }).catch(() => {});
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Talking to the servers                                              */
+/* ------------------------------------------------------------------ */
+
+async function send(url, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (state.session) headers.Authorization = `Bearer ${state.session.token}`;
   let response;
   try {
-    response = await fetch(`${state.base}${path}`, {
-      ...options,
-      headers,
-      credentials: 'same-origin',
-      cache: 'no-store',
-    });
+    response = await fetch(url, { ...options, headers, cache: 'no-store', credentials: 'omit' });
   } catch (error) {
-    const failure = new Error('The Deluxe Drive server could not be reached.');
+    const failure = new Error('The server could not be reached. Check your connection.');
     failure.offline = true;
     throw failure;
   }
-
-  // A token the server no longer knows (it restarted, or it expired) must not
-  // keep being sent: drop it so the next sign-in starts clean.
-  if (response.status === 401 && state.token) {
-    state.token = null;
-    state.user = null;
-  }
-
+  // A key Deluxe Main no longer knows is dropped, so the next visit signs in again.
+  if (response.status === 401 && state.session) saveSession(null);
   return response;
 }
 
-async function bodyOf(response) {
-  try {
-    return await response.json();
-  } catch (error) {
-    return null;
-  }
-}
-
-async function requestJson(path, options = {}) {
-  const response = await request(path, options);
-  const data = await bodyOf(response);
-
+async function asJson(response) {
+  const data = await response.json().catch(() => null);
   if (!response.ok) {
-    const error = new Error((data && data.error) || `The drive server answered ${response.status}.`);
+    const error = new Error((data && data.error) || `The server answered ${response.status}.`);
     error.status = response.status;
     error.code = data && data.code;
     throw error;
   }
-
   return data || {};
 }
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
-
-/* ------------------------------------------------------------------ */
-/* Accounts and the session                                            */
-/* ------------------------------------------------------------------ */
-
-export async function findAccount(name) {
-  return requestJson('/api/accounts/find', {
-    method: 'POST',
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ name }),
-  });
-}
-
-export async function accountById(id) {
-  const response = await request(`/api/accounts/${encodeURIComponent(id)}`);
-  if (response.status === 404) return null;
-  if (!response.ok) throw new Error('Could not read that account.');
-  return response.json();
-}
-
-// The password is hashed in the browser and only the hash is sent, the same
-// way the server stores it.
-export async function startSession(user) {
-  const data = await requestJson('/api/auth/session', {
-    method: 'POST',
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ userId: user.id, hash: user.hash }),
-  });
-
-  state.token = data.token;
-  state.user = data.user || { id: user.id, name: user.name };
-  return state.user;
-}
-
-export async function createAccount(record) {
-  const data = await requestJson('/api/accounts', {
-    method: 'POST',
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ name: record.name, salt: record.salt, hash: record.hash }),
-  });
-
-  state.token = data.token;
-  state.user = data.user || { id: record.name, name: record.name };
-  return state.user;
-}
-
-export async function changePassword({ id, currentHash, salt, hash }) {
-  await requestJson(`/api/accounts/${encodeURIComponent(id)}/password`, {
-    method: 'POST',
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ currentHash, salt, hash }),
-  });
-}
-
-export async function deleteAccount(id) {
-  await requestJson(`/api/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' });
-  endSession();
-}
-
-export function endSession() {
-  state.token = null;
-  state.user = null;
-}
+const driveCall = (path, options) => send(`${state.base}${path}`, options);
+const driveJson = async (path, options) => asJson(await driveCall(path, options));
+const mainJson = async (path, options) => asJson(await send(`${mainUrl()}${path}`, options));
+const dataPath = (key) => `/api/data/${DATA_APP}${key === undefined ? '' : `/${encodeURIComponent(key)}`}`;
 
 /* ------------------------------------------------------------------ */
 /* The drive's storage, with the same shape as db.js                   */
 /* ------------------------------------------------------------------ */
 
+// The file list and settings live in Deluxe Main ("node:<id>", "set:<key>");
+// the file contents live in the Deluxe Drive server.
 export const remote = {
   async allNodes() {
-    const data = await requestJson('/api/db/nodes');
-    return Array.isArray(data.nodes) ? data.nodes : [];
+    const data = await mainJson(`${dataPath()}?prefix=node:`);
+    return (data.items || []).map((item) => item.value).filter((node) => node && node.id);
   },
 
   async getNode(id) {
-    const response = await request(`/api/db/nodes/${encodeURIComponent(id)}`);
+    const response = await send(`${mainUrl()}${dataPath(`node:${id}`)}`);
     if (!response.ok) return undefined;
-    const data = await bodyOf(response);
-    return data && data.node ? data.node : undefined;
+    const data = await response.json().catch(() => null);
+    return data ? data.value : undefined;
   },
 
   async putNode(node) {
-    await requestJson(`/api/db/nodes/${encodeURIComponent(node.id)}`, {
-      method: 'PUT',
-      headers: JSON_HEADERS,
-      body: JSON.stringify(node),
-    });
+    await mainJson(dataPath(`node:${node.id}`), { method: 'PUT', headers: JSON_HEADERS, body: JSON.stringify({ value: node }) });
   },
 
   async putNodes(nodes) {
-    await requestJson('/api/db/nodes', {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ nodes }),
-    });
+    for (let index = 0; index < nodes.length; index += 500) {
+      const put = nodes.slice(index, index + 500).map((node) => ({ key: `node:${node.id}`, value: node }));
+      await mainJson(`${dataPath()}/batch`, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ put }) });
+    }
   },
 
   async deleteNode(id) {
-    await requestJson(`/api/db/nodes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await mainJson(dataPath(`node:${id}`), { method: 'DELETE' });
   },
 
   async getBlob(id) {
-    const response = await request(`/api/db/blobs/${encodeURIComponent(id)}`);
+    const response = await driveCall(`/api/db/blobs/${encodeURIComponent(id)}`);
     if (response.status === 404) return undefined;
-    if (!response.ok) throw new Error('That file could not be read from the server.');
-
-    const blob = await response.blob();
-    return { id, blob };
+    if (!response.ok) throw new Error('That file could not be read from Deluxe Drive.');
+    return { id, blob: await response.blob() };
   },
 
   async putBlob(id, blob) {
-    const response = await request(`/api/db/blobs/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': (blob && blob.type) || 'application/octet-stream' },
-      body: blob,
-    });
-
+    const headers = { 'Content-Type': (blob && blob.type) || 'application/octet-stream' };
+    if (blob && blob.name) headers['X-Deluxe-Name'] = encodeURIComponent(blob.name);
+    const response = await driveCall(`/api/db/blobs/${encodeURIComponent(id)}`, { method: 'PUT', headers, body: blob });
     if (!response.ok) {
-      const data = await bodyOf(response);
-      throw new Error((data && data.error) || 'That file could not be stored on the server.');
+      const data = await response.json().catch(() => null);
+      throw new Error((data && data.error) || 'That file could not be stored in Deluxe Drive.');
     }
     return true;
   },
 
   async deleteBlob(id) {
-    await requestJson(`/api/db/blobs/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await driveJson(`/api/db/blobs/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },
 
   async getSetting(key) {
-    const response = await request(`/api/db/settings/${encodeURIComponent(key)}`);
-    if (response.status === 404) return undefined;
+    const response = await send(`${mainUrl()}${dataPath(`set:${key}`)}`);
     if (!response.ok) return undefined;
-    const data = await bodyOf(response);
-    if (!data || !('value' in data)) return undefined;
-    return { key, value: data.value };
+    const data = await response.json().catch(() => null);
+    return data && 'value' in data ? { key, value: data.value } : undefined;
   },
 
   async putSetting(key, value) {
-    await requestJson(`/api/db/settings/${encodeURIComponent(key)}`, {
-      method: 'PUT',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ value }),
-    });
+    await mainJson(dataPath(`set:${key}`), { method: 'PUT', headers: JSON_HEADERS, body: JSON.stringify({ value }) });
   },
 
   async deleteSetting(key) {
-    await requestJson(`/api/db/settings/${encodeURIComponent(key)}`, { method: 'DELETE' });
+    await mainJson(dataPath(`set:${key}`), { method: 'DELETE' });
   },
 
+  // "Erase my files": the contents in Deluxe Drive, then the list in Deluxe Main.
   async clearAll() {
-    await requestJson('/api/db/clear', { method: 'POST' });
+    await driveJson('/api/db/clear', { method: 'POST' });
+    await mainJson(dataPath(), { method: 'DELETE' });
   },
 };
+
+// A drive used before Deluxe Main existed kept its file list on the Deluxe
+// Drive server. The first time its owner signs in, that list moves to Deluxe
+// Main (the files themselves stay where they are). Returns how many moved.
+export async function moveOldFileList() {
+  let old;
+  try {
+    old = await driveJson('/api/legacy/data');
+  } catch (error) {
+    return 0;
+  }
+  const nodes = Array.isArray(old.nodes) ? old.nodes : [];
+  const settings = Array.isArray(old.settings) ? old.settings : [];
+  if (!nodes.length && !settings.length) return 0;
+  const existing = await remote.allNodes();
+  const have = new Set(existing.map((node) => node.id));
+  await remote.putNodes(nodes.filter((node) => node && node.id && !have.has(node.id)));
+  for (const item of settings) await remote.putSetting(item.key, item.value);
+  await driveJson('/api/legacy/data/done', { method: 'POST' });
+  return nodes.length;
+}
 
 /* ------------------------------------------------------------------ */
 /* Share links                                                         */
 /* ------------------------------------------------------------------ */
 
-export async function shareFile(id) {
-  return requestJson(`/api/files/${encodeURIComponent(id)}/share`, { method: 'POST' });
+export async function shareFile(id, name) {
+  return driveJson(`/api/files/${encodeURIComponent(id)}/share`, {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ name: name || '' }),
+  });
 }
 
 export async function stopSharing(id) {
-  await requestJson(`/api/files/${encodeURIComponent(id)}/share`, { method: 'DELETE' });
+  await driveJson(`/api/files/${encodeURIComponent(id)}/share`, { method: 'DELETE' });
 }
 
-// Every link this account has handed out, so the drive can show them, copy one
-// again, or stop one.
 export async function listShares() {
-  const data = await requestJson('/api/files/shares');
+  const data = await driveJson('/api/files/shares');
   return Array.isArray(data.shares) ? data.shares : [];
 }
 
-// How large a single file the server will take, or 0 when it did not say.
-export function uploadLimit() {
-  const info = state.server;
-  const value = info && info.limits && Number(info.limits.uploadBytes);
-  return value > 0 ? value : 0;
-}
-
-// A link the drive itself can hand to anything, with no sign-in needed.
 export async function directLink(node) {
-  const share = await shareFile(node.id);
+  const share = await shareFile(node.id, node.name);
   return share.url;
 }
 
@@ -401,28 +377,17 @@ export async function directLink(node) {
 
 export function docsSettings() {
   try {
-    const raw = localStorage.getItem(DOCS_KEY);
-    if (!raw) return { ...DOCS_DEFAULTS };
-    const parsed = JSON.parse(raw);
-    return {
-      url: typeof parsed.url === 'string' ? parsed.url : '',
-      autoOpen: parsed.autoOpen !== false,
-    };
+    const parsed = JSON.parse(read(DOCS_KEY) || 'null');
+    if (!parsed) return { ...DOCS_DEFAULTS };
+    return { url: typeof parsed.url === 'string' && parsed.url ? parsed.url : DOCS_URL, autoOpen: parsed.autoOpen !== false };
   } catch (error) {
     return { ...DOCS_DEFAULTS };
   }
 }
 
 export function saveDocsSettings(next) {
-  const value = {
-    url: typeof next.url === 'string' ? next.url : '',
-    autoOpen: next.autoOpen !== false,
-  };
-  try {
-    localStorage.setItem(DOCS_KEY, JSON.stringify(value));
-  } catch (error) {
-    /* storage can be blocked; the connection still works this visit */
-  }
+  const value = { url: typeof next.url === 'string' && next.url ? next.url : DOCS_URL, autoOpen: next.autoOpen !== false };
+  write(DOCS_KEY, JSON.stringify(value));
   return value;
 }
 
@@ -430,51 +395,27 @@ export function docsReady() {
   return !!docsSettings().url && isOnline();
 }
 
-// A link id for Deluxe Docs: 12 letters and digits, new every time, good for
-// 60 seconds and one use. Deluxe Docs trades it for a key that can only read
-// this account's files. Making one also turns on opening documents in Docs.
-export async function generateLinkId() {
-  if (!isOnline()) {
-    throw new Error('Link IDs need the Deluxe Drive server. Open the drive at its workers.dev address.');
-  }
-  const data = await requestJson('/api/link', { method: 'POST' });
-  const settings = docsSettings();
-  if (!settings.url) saveDocsSettings({ ...settings, url: DOCS_URL });
-  return { linkId: String(data.linkId || ''), expiresIn: Number(data.expiresIn) || 60 };
-}
-
 function viewerUrl(fileUrl, name) {
-  const settings = docsSettings();
   let target;
   try {
-    target = new URL(settings.url);
+    target = new URL(docsSettings().url);
   } catch (error) {
     return null;
   }
-
-  // Deluxe Docs reads the file's direct link from `url` (its own README says
-  // `?url=`); `name` only sets the tab's title.
   target.searchParams.set('url', fileUrl);
   if (name) target.searchParams.set('name', name);
   return target.toString();
 }
 
-// Opens a file in Deluxe Docs. The file is shared first, so the viewer needs
-// no sign-in of its own to read it. The tab is opened before the share is
-// asked for, so the browser still counts it as part of the click.
+// Opens a file in Deluxe Docs through a share link, so Docs can read it even
+// before it is signed in. The tab opens first so the browser counts the click.
 export async function openInDocs(node) {
-  const settings = docsSettings();
-  if (!settings.url) throw new Error('Connect Deluxe Docs first.');
   if (!isOnline()) throw new Error('Deluxe Docs needs the Deluxe Drive server.');
-
   const tab = window.open('about:blank', '_blank');
-
   try {
-    const share = await shareFile(node.id);
+    const share = await shareFile(node.id, node.name);
     const url = viewerUrl(share.url, node.name);
-
     if (!url) throw new Error('The Deluxe Docs address is not valid.');
-
     if (tab) tab.location.href = url;
     else location.href = url;
     return url;
@@ -490,13 +431,6 @@ export async function openInDocs(node) {
   }
 }
 
-/* ------------------------------------------------------------------ */
-/* Local fallback                                                      */
-/* ------------------------------------------------------------------ */
-
-// Used by the connection dialog to explain where files are kept.
 export function storageLabel() {
-  return isOnline() ? 'Deluxe Drive server' : 'this browser';
+  return 'Deluxe Drive (files) and Deluxe Main (everything else)';
 }
-
-export { localDb };

@@ -1,9 +1,7 @@
 # Not part of the website: these stay out of the public files.
 worker/
-server/
 tests/
 wrangler.jsonc
-Dockerfile
 netlify.toml
 README.md
 .git

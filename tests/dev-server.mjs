@@ -1,12 +1,12 @@
 // The whole Deluxe Worker on your computer: Deluxe Main at /main, Deluxe Drive
 // at /. Data is kept in memory only. Run:
 //   node --import ./tests/register.mjs tests/dev-server.mjs [port]
-// and open http://localhost:8787 (Drive) or http://localhost:8787/main/ (Main).
+// and open http://localhost:8787 (Drive). Deluxe Main's pages run separately (on Vercel).
 import http from 'node:http';
 import { makeWorker } from './local-worker.mjs';
 
 const port = Number(process.argv[2] || 8787);
-const worker = await makeWorker({ ALLOW_LOCALHOST: '1', APP_KEY_MAIL: process.env.APP_KEY_MAIL || '' });
+const worker = await makeWorker({ ALLOW_LOCALHOST: '1', APP_KEY_MAIL: process.env.APP_KEY_MAIL || '', MAIN_SITE: process.env.MAIN_SITE || 'http://localhost:8790' });
 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);

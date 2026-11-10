@@ -1,6 +1,7 @@
 {
-  // The Deluxe server: Deluxe Main (accounts, sign-in, every website's data) at
-  // /main, and Deluxe Drive (its page, file contents and share links).
+  // The Deluxe server: Deluxe Main's data (accounts, sign-ins, every website's
+  // data) at /main/api, and Deluxe Drive (its page, file contents and share
+  // links). Deluxe Main's website is on Vercel (MAIN_SITE).
   "name": "deluxe-drive",
   "main": "worker/index.js",
   "compatibility_date": "2025-09-01",
@@ -27,6 +28,8 @@
   ],
 
   "vars": {
+    // Deluxe Main's website (on Vercel). People sign in there.
+    "MAIN_SITE": "https://deluxe-main.vercel.app",
     // Extra website addresses allowed to sign in, as JSON, e.g.
     // {"mail": ["https://deluxe-mail.vercel.app"]}
     "APP_ORIGINS": "{}"

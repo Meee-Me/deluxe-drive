@@ -105,6 +105,14 @@ async function readJsonBody(request) {
   }
 }
 
+// The visitor's address, for slowing down repeated tries. Deluxe Main's pages
+// on Vercel pass requests on, so Cloudflare sees Vercel's address; Vercel puts
+// the visitor's own in x-vercel-forwarded-for / x-forwarded-for.
+function clientIp(request) {
+  const forwarded = request.headers.get('x-vercel-forwarded-for') || request.headers.get('x-forwarded-for') || '';
+  return forwarded.split(',')[0].trim() || request.headers.get('cf-connecting-ip') || 'unknown';
+}
+
 function decodeSegment(value) {
   try {
     return decodeURIComponent(value);
@@ -551,7 +559,7 @@ export class MainCore {
     });
 
     r('POST', '/api/accounts', async ({ request }) => {
-      const ip = request.headers.get('cf-connecting-ip') || 'unknown';
+      const ip = clientIp(request);
       if (this.tooManyFailures(`create:${ip}`)) return json(429, { error: 'Too many new accounts. Try again later.' });
       const body = await readJsonBody(request);
       let account;
@@ -569,9 +577,8 @@ export class MainCore {
       const body = await readJsonBody(request);
       const name = String(body.name || '').trim().slice(0, 40);
       const hash = String(body.hash || '');
-      const ip = request.headers.get('cf-connecting-ip') || 'unknown';
       const nameKey = `login:${name.toLowerCase()}`;
-      if (this.tooManyFailures(nameKey) || this.tooManyFailures(`ip:${ip}`)) {
+      if (this.tooManyFailures(nameKey)) {
         return json(429, { error: 'Too many wrong tries. Wait a few minutes and try again.', code: 'rate-limited' });
       }
       if (!name || !HEX_PATTERN.test(hash)) return json(400, { error: 'Type your name and password.' });
@@ -582,7 +589,6 @@ export class MainCore {
 
       if (!account) {
         this.noteFailure(nameKey);
-        this.noteFailure(`ip:${ip}`);
         return json(401, { error: "That name and password don't match a Deluxe account.", code: 'unauthorized' });
       }
       this.clearFailures(nameKey);
@@ -722,7 +728,7 @@ export class MainCore {
     // code was made for (its Origin) can do that, within 60 seconds.
     r('POST', '/api/connect/exchange', async ({ request }) => {
       const origin = String(request.headers.get('origin') || '').toLowerCase();
-      const ip = request.headers.get('cf-connecting-ip') || 'unknown';
+      const ip = clientIp(request);
       if (this.tooManyFailures(`exchange:${ip}`)) return json(429, { error: 'Too many tries. Wait a few minutes.' });
       const body = await readJsonBody(request);
       const row = await this.takeCode(body.code);

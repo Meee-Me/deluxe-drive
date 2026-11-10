@@ -11,8 +11,8 @@
 // This module also opens documents in Deluxe Docs, which signs in with Deluxe
 // Main by itself.
 
-// Deluxe Main runs inside the Deluxe Worker, under /main.
-const DEFAULT_MAIN = 'https://deluxe-drive.deluxelordd.workers.dev/main';
+// Deluxe Main is on Vercel; its /api addresses reach the Deluxe data server.
+const DEFAULT_MAIN = 'https://deluxe-main.vercel.app';
 const DEFAULT_SERVER = 'https://deluxe-drive.deluxelordd.workers.dev';
 // Where Deluxe Docs lives. Opening a document there passes a share link.
 export const DOCS_URL = 'https://deluxe-docs-iota.vercel.app';

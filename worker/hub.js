@@ -627,7 +627,7 @@ export class HubCore {
     const gone = (message) => () => json(410, { error: message, code: 'moved-to-deluxe-main' });
     const accountsMoved = 'Deluxe accounts are made and managed on Deluxe Main now.';
 
-    r('GET', '/api/health', ({ url }) =>
+    r('GET', '/api/health', () =>
       json(200, {
         ok: true,
         name: SERVER_NAME,
@@ -636,8 +636,8 @@ export class HubCore {
         files: this.store.name,
         version: 'worker 3',
         accounts: 'deluxe-main',
-        // Deluxe Main runs in this same Worker, under /main.
-        main: String(this.env.MAIN_URL || `${url.origin}/main`).replace(/\/+$/, ''),
+        // Deluxe Main's website (on Vercel), where people sign in.
+        main: String(this.env.MAIN_SITE || 'https://deluxe-main.vercel.app').replace(/\/+$/, ''),
         limits: { uploadBytes: this.maxUpload },
       })
     );

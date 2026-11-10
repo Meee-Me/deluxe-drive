@@ -1647,7 +1647,7 @@ async function signOutDrive() {
 const CREDITS_SITES = [
   {
     name: 'Deluxe Main',
-    url: 'https://deluxe-drive.deluxelordd.workers.dev/main/',
+    url: 'https://deluxe-main.vercel.app/',
     label: 'Your Deluxe account',
   },
   {

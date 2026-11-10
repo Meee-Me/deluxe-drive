@@ -2,9 +2,10 @@
 
 This repository is **the one Deluxe server** on Cloudflare (`deluxe-drive.deluxelordd.workers.dev`):
 
-- `/main/` — **Deluxe Main**, the Deluxe account: sign-in pages and, under `/main/api/`, every
-  account, sign-in and website's saved data. Copied from the Deluxe-Main repository by
-  `tools/sync-main.sh` into `main/` and `worker/main/`.
+- `/main/api/` — **Deluxe Main's data**: every account, sign-in and website's saved data. The code
+  is copied from the Deluxe-Main repository by `tools/sync-main.sh` into `worker/main/`. Deluxe
+  Main's website is **on Vercel** (https://deluxe-main.vercel.app, `MAIN_SITE`); it passes its
+  `/api` requests on to here, and `/main/` here redirects to it.
 - everything else — **Deluxe Drive**, a Google Drive–style file manager.
 
 Deluxe Drive never makes accounts: you sign in with your Deluxe account, or **continue as a guest**
@@ -70,7 +71,6 @@ js/ui.js            icons, formatting, toasts, modal dialogs
 vendor/             pinned docx-preview + JSZip (faithful .docx) and PDF.js (PDF pages) builds
 worker/index.js     entry point: /main to Deluxe Main, /api and /s to the Hub, the page otherwise
 worker/main/        Deluxe Main's server (copied from Deluxe-Main)
-main/               Deluxe Main's pages (copied from Deluxe-Main)
 js/db.js            this browser's storage, for guests
 worker/hub.js       the server: file contents, share links, moving old accounts to Deluxe Main
 wrangler.jsonc      bindings and settings (MAIN_URL: which Deluxe Main to trust)
@@ -93,8 +93,9 @@ A single file can be up to 100 MB (the Workers request limit). Copies of the pag
 
 Tests: `node tests/worker.test.mjs` (SQLite), `STORE=r2 node tests/worker.test.mjs` (fake R2) and
 `node --import ./tests/register.mjs tests/combined.test.mjs` (the whole Worker: Main and Drive together).
-To try everything locally: `node --import ./tests/register.mjs tests/dev-server.mjs` and open
-http://localhost:8787 (Drive) or http://localhost:8787/main/ (Deluxe Main).
+To try everything locally: `MAIN_SITE=http://localhost:8790 node --import ./tests/register.mjs tests/dev-server.mjs`
+(Drive and the data server on :8787), plus Deluxe Main's pages on :8790 passing /api to
+http://localhost:8787/main/api (as Vercel does).
 
 ## Deluxe Docs
 
@@ -114,7 +115,7 @@ account menu, where they can be copied again or stopped.
 ## Credits
 
 Directed by **Shivad Sujith**. AI support: **Claude**. Built with **FreeMilk**. Powered by
-**Netlify**. Other sites by Deluxe Lord — [Deluxe Main](https://deluxe-drive.deluxelordd.workers.dev/main) (your Deluxe account), [YouTube Guider AI](https://youtube-guide-ai.netlify.app/),
+**Netlify**. Other sites by Deluxe Lord — [Deluxe Main](https://deluxe-main.vercel.app) (your Deluxe account), [YouTube Guider AI](https://youtube-guide-ai.netlify.app/),
 [Deluxe Convert](https://deluxe-convert-cloud.deluxelordd.workers.dev),
 [Deluxe Translate](https://deluxe-translate-8m27.netlify.app/). The same list is in the app: the
 **credits** link on the lock screen, or **Credits** in the account menu.

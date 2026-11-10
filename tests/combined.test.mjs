@@ -17,18 +17,15 @@ async function call(method, p, { token, body, headers = {}, raw } = {}) {
 let n = 0;
 const ok = (m) => console.log(`ok ${++n} ${m}`);
 
-let r = await call('GET', '/main/');
-assert.equal(r.status, 200); assert.match(await r.text(), /Deluxe Main/);
-r = await call('GET', '/main/connect?return=x');
-assert.match(await r.text(), /Deluxe Main/);
-r = await call('GET', '/main/deluxe.js');
-assert.match(await r.text(), /Sign in with Deluxe Main/);
+let r = await call('GET', '/main/connect?return=x');
+assert.equal(r.status, 302);
+assert.equal(r.headers.get('location'), 'https://deluxe-main.vercel.app/connect?return=x', 'Main pages are on Vercel');
 r = await call('GET', '/main/api/health');
 assert.equal((await r.json()).name, 'Deluxe Main');
 assert.equal(r.headers.get('access-control-allow-origin'), '*');
 r = await call('GET', '/api/health');
-assert.equal((await r.json()).main, `${O}/main`);
-ok('one Worker serves Main pages, Main API and Drive');
+assert.equal((await r.json()).main, 'https://deluxe-main.vercel.app');
+ok('one Worker keeps Main data and Drive; Main pages redirect to Vercel');
 
 const salt = randomBytes(16).toString('hex'), hash = derive('password123', salt);
 r = await call('POST', '/main/api/accounts', { body: { name: 'One Server', salt, hash } });

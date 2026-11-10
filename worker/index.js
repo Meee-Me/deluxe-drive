@@ -1,8 +1,10 @@
 // The Deluxe server on Cloudflare Workers: one Worker for every Deluxe website.
 //
-//   /main/...        Deluxe Main: the account sign-in pages (main/) and, under
-//                    /main/api/, the accounts, sign-ins and every website's
+//   /main/api/...    Deluxe Main's data: accounts, sign-ins and every website's
 //                    saved data (the Main Durable Object, worker/main/core.js).
+//                    Deluxe Main's website is on Vercel (MAIN_SITE), which passes
+//                    its /api requests on to here.
+//   /main/...        anything else under /main goes to that Vercel site.
 //   /api/..., /s/... Deluxe Drive's file contents and share links (the Hub
 //                    Durable Object, worker/hub.js).
 //   anything else    Deluxe Drive's own page (index.html, js/, ...).
@@ -15,6 +17,7 @@ import { HubCore } from './hub.js';
 import { MainCore } from './main/core.js';
 
 const INTERNAL = 'https://deluxe.internal';
+const DEFAULT_MAIN_SITE = 'https://deluxe-main.vercel.app';
 
 function mainStub(env) {
   return env.MAIN.get(env.MAIN.idFromName('deluxe-main'));
@@ -91,15 +94,10 @@ export default {
       return withCors(request, await mainStub(env).fetch(new Request(inner, request)));
     }
 
-    // Deluxe Main's pages. /main/connect (and any other page address) shows
-    // main/index.html; real files are served as they are.
+    // Deluxe Main's website is only on Vercel.
     if (pathname === '/main' || pathname.startsWith('/main/')) {
-      if (pathname === '/main') return Response.redirect(`${url.origin}/main/`, 301);
-      const asset = await env.ASSETS.fetch(request);
-      if (asset.status !== 404) return asset;
-      const page = new URL(url);
-      page.pathname = '/main/';
-      return env.ASSETS.fetch(new Request(page, request));
+      const site = String(env.MAIN_SITE || DEFAULT_MAIN_SITE).replace(/\/+$/, '');
+      return Response.redirect(`${site}${pathname.slice('/main'.length) || '/'}${url.search}`, 302);
     }
 
     if (/^\/(api|s)\//.test(pathname)) {

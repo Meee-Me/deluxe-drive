@@ -70,9 +70,8 @@ export const APPS = {
   mail: {
     name: 'Deluxe Mail',
     about: 'Your @deluxemail.com inbox',
-    url: '',
-    // Add the Mail site's address here or with APP_ORIGINS, e.g. {"mail": ["https://deluxemail.vercel.app"]}.
-    origins: [],
+    url: 'https://deluxe-mail.vercel.app',
+    origins: ['https://deluxe-mail.vercel.app'],
     reads: [],
   },
 };

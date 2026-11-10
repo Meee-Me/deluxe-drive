@@ -1651,6 +1651,11 @@ const CREDITS_SITES = [
     label: 'Your Deluxe account',
   },
   {
+    name: 'Deluxe Mail',
+    url: 'https://deluxe-mail.vercel.app',
+    label: 'deluxe-mail.vercel.app',
+  },
+  {
     name: 'Deluxe Docs',
     url: 'https://deluxe-docs-iota.vercel.app',
     label: 'deluxe-docs-iota.vercel.app',

@@ -25,14 +25,20 @@ export const APPS = {
     name: 'Deluxe Drive',
     about: 'Keep and share your files',
     url: 'https://deluxe-drive.deluxelordd.workers.dev',
-    origins: ['https://deluxe-drive.deluxelordd.workers.dev', 'https://deluxe-drive-xi.vercel.app'],
+    origins: [
+      'https://deluxe-drive.deluxelordd.workers.dev',
+      'https://deluxe-drive-xi.vercel.app',
+      'https://deluxe-drive.netlify.app',
+      'https://depuxe-drive.netlify.app',
+      'https://tbr-deluxe-drive.netlify.app',
+    ],
     reads: [],
   },
   docs: {
     name: 'Deluxe Docs',
     about: 'Open PDFs, Word, Excel and slides',
     url: 'https://deluxe-docs-iota.vercel.app',
-    origins: ['https://deluxe-docs.deluxelordd.workers.dev', 'https://deluxe-docs-iota.vercel.app'],
+    origins: ['https://deluxe-docs.deluxelordd.workers.dev', 'https://deluxe-docs-iota.vercel.app', 'https://deluxe-docs.netlify.app'],
     // Docs lists and opens the files kept in Deluxe Drive.
     reads: ['drive'],
   },
@@ -40,7 +46,11 @@ export const APPS = {
     name: 'Deluxe Convert',
     about: 'Convert files in your browser',
     url: 'https://deluxe-convert-cloud.deluxelordd.workers.dev',
-    origins: ['https://deluxe-convert-cloud.deluxelordd.workers.dev', 'https://deluxe-convert.deluxelordd.workers.dev'],
+    origins: [
+      'https://deluxe-convert-cloud.deluxelordd.workers.dev',
+      'https://deluxe-convert.deluxelordd.workers.dev',
+      'https://deluxe-convert.netlify.app',
+    ],
     reads: [],
   },
   translate: {

@@ -60,15 +60,23 @@ export const APPS = {
   translate: {
     name: 'Deluxe Translate',
     about: 'Translate text and photos',
-    url: 'https://deluxe-translate-8m27.netlify.app',
-    origins: ['https://deluxe-translate-8m27.netlify.app', 'https://*--deluxe-translate-8m27.netlify.app'],
+    url: 'https://deluxe-translate-app.vercel.app',
+    origins: [
+      'https://deluxe-translate-app.vercel.app',
+      'https://deluxe-translate-8m27.netlify.app',
+      'https://*--deluxe-translate-8m27.netlify.app',
+    ],
     reads: [],
   },
   youtube: {
     name: 'YouTube Guider AI',
     about: 'Channel stats and estimates',
-    url: 'https://youtube-guide-ai.netlify.app',
-    origins: ['https://youtube-guide-ai.netlify.app', 'https://*--youtube-guide-ai.netlify.app'],
+    url: 'https://deluxe-youtube-guider.vercel.app',
+    origins: [
+      'https://deluxe-youtube-guider.vercel.app',
+      'https://youtube-guide-ai.netlify.app',
+      'https://*--youtube-guide-ai.netlify.app',
+    ],
     reads: [],
   },
   mail: {

@@ -1662,8 +1662,8 @@ const CREDITS_SITES = [
   },
   {
     name: 'YouTube Guider AI',
-    url: 'https://youtube-guide-ai.netlify.app/',
-    label: 'youtube-guide-ai.netlify.app',
+    url: 'https://deluxe-youtube-guider.vercel.app/',
+    label: 'deluxe-youtube-guider.vercel.app',
   },
   {
     name: 'Deluxe Convert',
@@ -1672,8 +1672,8 @@ const CREDITS_SITES = [
   },
   {
     name: 'Deluxe Translate',
-    url: 'https://deluxe-translate-8m27.netlify.app/',
-    label: 'deluxe-translate-8m27.netlify.app',
+    url: 'https://deluxe-translate-app.vercel.app/',
+    label: 'deluxe-translate-app.vercel.app',
   },
 ];
 

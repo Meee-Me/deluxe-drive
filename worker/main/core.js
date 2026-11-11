@@ -22,6 +22,7 @@ const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 ._-]{1,22}[A-Za-z0-9]$/;
 const MAIN_SESSION_SECONDS = 180 * 24 * 60 * 60;
 const APP_SESSION_SECONDS = 180 * 24 * 60 * 60;
 const CODE_SECONDS = 60;
+const DEVICE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
 const MAX_VALUE_BYTES = 1024 * 1024;
 const MAX_LIST = 5000;
@@ -38,6 +39,8 @@ const SCHEMA = [
      created_at INTEGER, expires_at INTEGER, last_seen INTEGER)`,
   `CREATE INDEX IF NOT EXISTS sessions_account ON sessions (account_id, app)`,
   `CREATE TABLE IF NOT EXISTS grants (account_id TEXT NOT NULL, app TEXT NOT NULL, created_at INTEGER, PRIMARY KEY (account_id, app))`,
+  `CREATE TABLE IF NOT EXISTS device_codes (
+     code_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL, expires_at INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS codes (
      code_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL, app TEXT NOT NULL, origin TEXT NOT NULL, expires_at INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS data (
@@ -325,7 +328,7 @@ export class MainCore {
 
   async deleteAccount(id) {
     this.run(`DELETE FROM accounts WHERE id = ?`, id);
-    for (const table of ['sessions', 'grants', 'codes', 'data']) this.run(`DELETE FROM ${table} WHERE account_id = ?`, id);
+    for (const table of ['sessions', 'grants', 'codes', 'device_codes', 'data']) this.run(`DELETE FROM ${table} WHERE account_id = ?`, id);
   }
 
   /* ---------------- sessions ---------------- */
@@ -609,6 +612,49 @@ export class MainCore {
         expiresIn: who.app === 'main' ? MAIN_SESSION_SECONDS : APP_SESSION_SECONDS,
         reads: who.app === 'main' ? Object.keys(APPS) : [who.app, ...(APPS[who.app] ? APPS[who.app].reads : [])],
       });
+    });
+
+    // Signing in on another device with a 60-second code: a signed-in device
+    // makes it, the other device types it. 12 letters and digits (no 0, O, 1
+    // or I), works once, and a newer code ends the older one.
+    r('POST', '/api/account/device-code', async ({ request }) => {
+      const [who, denied] = await this.need(request, { mainOnly: true });
+      if (denied) return denied;
+      const bytes = crypto.getRandomValues(new Uint8Array(12));
+      let raw = '';
+      for (const byte of bytes) raw += DEVICE_ALPHABET[byte % DEVICE_ALPHABET.length];
+      const now = Date.now();
+      this.run(`DELETE FROM device_codes WHERE account_id = ? OR expires_at <= ?`, who.account.id, now);
+      this.run(
+        `INSERT INTO device_codes (code_hash, account_id, expires_at) VALUES (?, ?, ?)`,
+        await sha256(`device:${raw}`),
+        who.account.id,
+        now + CODE_SECONDS * 1000
+      );
+      return json(201, { code: raw.replace(/(.{4})(?=.)/g, '$1-'), expiresIn: CODE_SECONDS });
+    });
+
+    r('POST', '/api/auth/device', async ({ request }) => {
+      const ip = clientIp(request);
+      if (this.tooManyFailures(`device:${ip}`)) {
+        return json(429, { error: 'Too many wrong codes. Wait a few minutes and try again.', code: 'rate-limited' });
+      }
+      const body = await readJsonBody(request);
+      const raw = String(body.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      let account = null;
+      if (raw.length === 12) {
+        const hash = await sha256(`device:${raw}`);
+        const row = this.one(`SELECT * FROM device_codes WHERE code_hash = ?`, hash);
+        if (row) {
+          this.run(`DELETE FROM device_codes WHERE code_hash = ?`, hash);
+          if (row.expires_at > Date.now()) account = this.accountById(row.account_id);
+        }
+      }
+      if (!account) {
+        this.noteFailure(`device:${ip}`);
+        return json(400, { error: 'That code has run out or was already used. Make a new one on your other device.', code: 'bad-code' });
+      }
+      return this.signedIn(account);
     });
 
     r('POST', '/api/auth/logout', async ({ request }) => {

@@ -154,6 +154,13 @@ export class MainCore {
     this.driveCall = options.drive || null;
     this.failures = new Map();
     for (const statement of SCHEMA) this.sql.exec(statement);
+    // Where a 60-second code was made: '' on Deluxe Main (it can sign in
+    // Deluxe Main itself), otherwise the website (it can only sign in websites).
+    try {
+      this.sql.exec(`ALTER TABLE device_codes ADD COLUMN made_by TEXT DEFAULT ''`);
+    } catch (error) {
+      /* already there */
+    }
     this.routes = [];
     this.defineRoutes();
   }
@@ -617,44 +624,79 @@ export class MainCore {
     // Signing in on another device with a 60-second code: a signed-in device
     // makes it, the other device types it. 12 letters and digits (no 0, O, 1
     // or I), works once, and a newer code ends the older one.
+    // Signing in on another device with a 60-second code: a signed-in device
+    // (Deluxe Main or any Deluxe website) makes it, the other device types it.
+    // 12 letters and digits (no 0, O, 1 or I), works once, and a newer code
+    // ends the older one. A code made on a website can only sign websites in.
     r('POST', '/api/account/device-code', async ({ request }) => {
-      const [who, denied] = await this.need(request, { mainOnly: true });
+      const [who, denied] = await this.need(request);
       if (denied) return denied;
+      if (who.kind !== 'session') return json(403, { error: 'A person has to make this code.' });
       const bytes = crypto.getRandomValues(new Uint8Array(12));
       let raw = '';
       for (const byte of bytes) raw += DEVICE_ALPHABET[byte % DEVICE_ALPHABET.length];
       const now = Date.now();
       this.run(`DELETE FROM device_codes WHERE account_id = ? OR expires_at <= ?`, who.account.id, now);
       this.run(
-        `INSERT INTO device_codes (code_hash, account_id, expires_at) VALUES (?, ?, ?)`,
+        `INSERT INTO device_codes (code_hash, account_id, expires_at, made_by) VALUES (?, ?, ?, ?)`,
         await sha256(`device:${raw}`),
         who.account.id,
-        now + CODE_SECONDS * 1000
+        now + CODE_SECONDS * 1000,
+        who.app === 'main' ? '' : who.app
       );
       return json(201, { code: raw.replace(/(.{4})(?=.)/g, '$1-'), expiresIn: CODE_SECONDS });
     });
 
-    r('POST', '/api/auth/device', async ({ request }) => {
+    // Uses up a code; returns its row, or null (and counts a wrong try).
+    const takeDeviceCode = async (request, value) => {
       const ip = clientIp(request);
-      if (this.tooManyFailures(`device:${ip}`)) {
-        return json(429, { error: 'Too many wrong codes. Wait a few minutes and try again.', code: 'rate-limited' });
-      }
-      const body = await readJsonBody(request);
-      const raw = String(body.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-      let account = null;
+      if (this.tooManyFailures(`device:${ip}`)) return { limited: true };
+      const raw = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      let row = null;
       if (raw.length === 12) {
         const hash = await sha256(`device:${raw}`);
-        const row = this.one(`SELECT * FROM device_codes WHERE code_hash = ?`, hash);
-        if (row) {
-          this.run(`DELETE FROM device_codes WHERE code_hash = ?`, hash);
-          if (row.expires_at > Date.now()) account = this.accountById(row.account_id);
-        }
+        row = this.one(`SELECT * FROM device_codes WHERE code_hash = ?`, hash);
+        if (row) this.run(`DELETE FROM device_codes WHERE code_hash = ?`, hash);
+        if (row && row.expires_at <= Date.now()) row = null;
       }
-      if (!account) {
-        this.noteFailure(`device:${ip}`);
-        return json(400, { error: 'That code has run out or was already used. Make a new one on your other device.', code: 'bad-code' });
+      if (!row) this.noteFailure(`device:${ip}`);
+      return { row };
+    };
+    const badCode = () =>
+      json(400, { error: 'That code has run out or was already used. Make a new one on your other device.', code: 'bad-code' });
+    const limited = () => json(429, { error: 'Too many wrong codes. Wait a few minutes and try again.', code: 'rate-limited' });
+
+    // On Deluxe Main: a code made on Deluxe Main signs Deluxe Main in.
+    r('POST', '/api/auth/device', async ({ request }) => {
+      const body = await readJsonBody(request);
+      const taken = await takeDeviceCode(request, body.code);
+      if (taken.limited) return limited();
+      if (!taken.row) return badCode();
+      if (taken.row.made_by) {
+        return json(400, {
+          error: 'That code was made on a Deluxe website, so it can sign in websites but not Deluxe Main. Make one on Deluxe Main instead.',
+          code: 'website-code',
+        });
       }
-      return this.signedIn(account);
+      const account = this.accountById(taken.row.account_id);
+      return account ? this.signedIn(account) : badCode();
+    });
+
+    // On a Deluxe website: any code signs that website in (the website is
+    // known from the page's Origin, as for a normal sign-in).
+    r('POST', '/api/connect/device', async ({ request }) => {
+      const body = await readJsonBody(request);
+      const origin = String(request.headers.get('origin') || '');
+      const app = appForOrigin(origin, this.env, String(body.app || ''));
+      if (!app) return json(400, { error: 'This website cannot use Deluxe Main.', code: 'unknown-site' });
+      const taken = await takeDeviceCode(request, body.code);
+      if (taken.limited) return limited();
+      if (!taken.row) return badCode();
+      const account = this.accountById(taken.row.account_id);
+      if (!account) return badCode();
+      this.run(`INSERT OR IGNORE INTO grants (account_id, app, created_at) VALUES (?, ?, ?)`, account.id, app, Date.now());
+      const session = await this.createSession(account.id, app, APP_SESSION_SECONDS);
+      return json(200, { token: session.token, expiresIn: session.expiresIn, app, user: publicUser(account) });
     });
 
     r('POST', '/api/auth/logout', async ({ request }) => {

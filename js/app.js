@@ -7,7 +7,7 @@ import { mountPdf, mountScaled, closeViewer } from './viewer.js';
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 33';
+const BUILD = 'build 34';
 
 // The drive signs in with Deluxe Main. The folder and file list and settings
 // are saved in Deluxe Main; the file contents in the Deluxe Drive server.
@@ -1988,8 +1988,15 @@ function bindUI() {
       event.currentTarget,
       [
         ...(cloud.isGuest()
-          ? [{ action: 'signin', label: 'Sign in with Deluxe Main (keeps your files)', icon: 'info' }]
-          : [{ action: 'account', label: 'Your Deluxe account', icon: 'info' }, { action: 'docs', label: 'Deluxe Docs', icon: 'doc' }]),
+          ? [
+              { action: 'signin', label: 'Sign in with Deluxe Main (keeps your files)', icon: 'info' },
+              { action: 'usecode', label: 'Use a code from another device', icon: 'link' },
+            ]
+          : [
+              { action: 'account', label: 'Your Deluxe account', icon: 'info' },
+              { action: 'code', label: 'Sign in on another device', icon: 'link' },
+              { action: 'docs', label: 'Deluxe Docs', icon: 'doc' },
+            ]),
         ...(cloud.isOnline() ? [{ action: 'shares', label: 'Shared links', icon: 'link' }] : []),
         { action: 'sites', label: 'Deluxe websites', icon: 'link' },
         { action: 'credits', label: 'Credits', icon: 'info' },
@@ -1999,6 +2006,8 @@ function bindUI() {
       (action) => {
         if (action === 'account') openAccount();
         else if (action === 'signin') cloud.signIn();
+        else if (action === 'code') codeWindow('show');
+        else if (action === 'usecode') codeWindow('enter');
         else if (action === 'sites') showMoreSites();
         else if (action === 'docs') showDocsDialog();
         else if (action === 'shares') showSharesDialog();
@@ -2211,7 +2220,26 @@ async function enterApp(user) {
 
 // Deluxe Drive never makes accounts: the lock screen has one button, which
 // goes to Deluxe Main (where accounts are made) and comes back signed in.
+// The 60-second code window comes from Deluxe Main (deluxe.js). When it signs
+// this browser in, the page reloads into the drive.
+function codeWindow(mode) {
+  if (!window.Deluxe || !window.Deluxe.codeDialog) {
+    toast('Deluxe Main could not be reached. Check your connection.');
+    return;
+  }
+  window.Deluxe.codeDialog(mode);
+}
+if (window.Deluxe && window.Deluxe.onChange) {
+  window.Deluxe.onChange((user) => {
+    if (user && (!state.currentUser || state.currentUser.id === 'guest')) {
+      cloud.setGuest(false);
+      location.reload();
+    }
+  });
+}
+
 function bindAuthScreen() {
+  $('#auth-code').addEventListener('click', () => codeWindow('enter'));
   $('#auth-guest').addEventListener('click', () => {
     cloud.setGuest(true);
     enterGuest();

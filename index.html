@@ -24,6 +24,7 @@
       <p id="auth-error" class="auth-error" role="alert"></p>
 
       <button id="auth-submit" class="btn primary block" type="submit">Sign in with Deluxe Main</button>
+      <button id="auth-code" class="btn ghost block" type="button">Use a code from another device</button>
       <button id="auth-guest" class="btn ghost block" type="button">Continue as guest</button>
       <a id="auth-create" class="link" href="https://deluxe-main.vercel.app/">No account yet? Create one on Deluxe Main</a>
 
@@ -280,6 +281,8 @@
   </script>
 
   <!-- The ?v= query busts a stale cached copy of the module between deploys. -->
-  <script type="module" src="js/app.js?v=35"></script>
+  <!-- Deluxe Main's 60-second code window (quiet mode: Drive handles its own sign-in) -->
+  <script src="https://deluxe-main.vercel.app/deluxe.js" data-app="drive" data-session-key="dd.main.session" data-passive="1"></script>
+  <script type="module" src="js/app.js?v=36"></script>
 </body>
 </html>

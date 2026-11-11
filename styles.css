@@ -2387,6 +2387,7 @@ button {
   }
 }
 
-#auth-guest {
+#auth-guest,
+#auth-code {
   margin-top: 10px;
 }

@@ -79,6 +79,13 @@ export const APPS = {
     ],
     reads: [],
   },
+  meet: {
+    name: 'Deluxe Meet',
+    about: 'Video calls in your browser',
+    url: 'https://deluxe-meet.vercel.app',
+    origins: ['https://deluxe-meet.vercel.app'],
+    reads: [],
+  },
   mail: {
     name: 'Deluxe Mail',
     about: 'Your @deluxemail.com inbox',

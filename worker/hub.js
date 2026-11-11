@@ -618,11 +618,13 @@ export class HubCore {
       if (reading && /^\/api\/(db\/blobs\/[^/]+|auth\/me)$/.test(path)) return [who, null];
       return [null, json(403, { error: 'This connection can only read documents.', code: 'read-only' })];
     }
-    // Deluxe Convert may upload new files (to save converted files here).
+    // Deluxe Convert may upload new files (to save converted files here)...
     if (who.app === 'convert') {
       const path = new URL(request.url).pathname;
       if (request.method === 'PUT' && /^\/api\/db\/blobs\/[^/]+$/.test(path)) return [{ ...who, addOnly: true }, null];
-      return [null, json(403, { error: 'Deluxe Convert can only add files.', code: 'add-only' })];
+      // ...and open files from the drive ("Add from Drive"), read only.
+      if ((request.method === 'GET' || request.method === 'HEAD') && /^\/api\/db\/blobs\/[^/]+$/.test(path)) return [who, null];
+      return [null, json(403, { error: 'Deluxe Convert can only open and add files.', code: 'add-only' })];
     }
     return [null, json(403, { error: 'This website cannot use Deluxe Drive.', code: 'forbidden' })];
   }

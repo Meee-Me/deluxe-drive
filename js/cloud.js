@@ -480,7 +480,7 @@ export async function openInDocs(node) {
 // file already added (through a share link, so Convert needs nothing else).
 export const CONVERT_URL = 'https://deluxe-convert.vercel.app';
 
-export async function openInConvert(node) {
+export async function openInConvert(node, format = '') {
   if (!isOnline()) throw new Error('Sign in to send files to Deluxe Convert.');
   const tab = window.open('about:blank', '_blank');
   try {
@@ -488,6 +488,7 @@ export async function openInConvert(node) {
     const target = new URL(CONVERT_URL);
     target.searchParams.set('url', share.url);
     target.searchParams.set('name', node.name);
+    if (format) target.searchParams.set('to', format);
     if (tab) tab.location.href = target.toString();
     else location.href = target.toString();
   } catch (error) {

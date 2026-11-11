@@ -135,11 +135,11 @@ ok('docs key reads files only');
 assert.equal((await call('PUT', '/api/db/blobs/conv_1', { token: 'k_convert', raw: new Uint8Array(3), headers: { 'Content-Length': '3' } })).status, 201);
 assert.equal((await call('PUT', '/api/db/blobs/conv_1', { token: 'k_convert', raw: new Uint8Array(4), headers: { 'Content-Length': '4' } })).status, 409, 'no overwriting');
 assert.equal((await call('PUT', '/api/db/blobs/f_1', { token: 'k_convert', raw: new Uint8Array(4), headers: { 'Content-Length': '4' } })).status, 409);
-assert.equal((await call('GET', '/api/db/blobs/conv_1', { token: 'k_convert' })).status, 403, 'no reading');
+assert.equal((await call('GET', '/api/db/blobs/conv_1', { token: 'k_convert' })).status, 200, 'opens files');
 assert.equal((await call('DELETE', '/api/db/blobs/conv_1', { token: 'k_convert' })).status, 403, 'no deleting');
 assert.equal((await call('GET', '/api/db/blobs/conv_1', { token: T })).status, 200, 'the owner sees it');
 await call('DELETE', '/api/db/blobs/conv_1', { token: T });
-ok('convert key only adds new files');
+ok('convert key opens files and adds new ones, never changes or deletes');
 
 // accounts are isolated
 assert.equal((await call('GET', '/api/db/blobs/f_1', { token: 'k_other' })).status, 404);

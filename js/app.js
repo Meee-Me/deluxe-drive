@@ -648,7 +648,10 @@ function openNodeMenu(id, anchor) {
         }
       }
       if (cloud.docsReady()) items.push({ action: 'docs', label: 'Open in Deluxe Docs', icon: 'doc' });
-      if (cloud.isOnline()) items.push({ action: 'convert', label: 'Convert with Deluxe Convert', icon: 'upload' });
+      if (cloud.isOnline()) {
+        items.push({ action: 'convert', label: 'Convert with Deluxe Convert', icon: 'upload' });
+        items.push({ action: 'saveas', label: 'Save as… (another format)', icon: 'file' });
+      }
     }
     items.push({
       action: 'star',
@@ -675,6 +678,27 @@ async function performNodeAction(action, id) {
 
   if (action === 'docs') {
     openInDocs(node);
+    return;
+  }
+
+  if (action === 'saveas') {
+    const ext = (node.name.split('.').pop() || '').toLowerCase();
+    const guess = { pdf: 'docx', docx: 'pdf', doc: 'pdf', png: 'jpg', jpg: 'png', jpeg: 'png', heic: 'jpg', mp4: 'mp3', mov: 'mp4', wav: 'mp3', xlsx: 'csv', csv: 'xlsx' }[ext] || 'pdf';
+    const typed = await showDialog({
+      title: `Save “${node.name}” as…`,
+      message: 'Type a format, for example pdf, docx, jpg, png, mp3, csv or zip. Deluxe Convert opens ready to convert it; tap Save to Drive there to keep the result here.',
+      input: guess,
+      confirmLabel: 'Open in Deluxe Convert',
+    });
+    const fmt = String(typed || '').trim().toLowerCase().replace(/^\./, '').replace(/[^a-z0-9]/g, '').slice(0, 10);
+    if (!fmt) return;
+    try {
+      await cloud.openInConvert(node, fmt);
+      state.shared.add(node.id);
+      render();
+    } catch (error) {
+      toast(error.message || 'Could not open Deluxe Convert');
+    }
     return;
   }
 

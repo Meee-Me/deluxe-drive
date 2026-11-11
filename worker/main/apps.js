@@ -56,8 +56,9 @@ export const APPS = {
       'https://deluxe-convert.deluxelordd.workers.dev',
       'https://deluxe-convert.netlify.app',
     ],
-    reads: [],
-    // Converted files can be saved into Deluxe Drive (new files only).
+    // Convert can open files from Deluxe Drive, and save converted files into
+    // it (new files only: it never changes or deletes anything there).
+    reads: ['drive'],
     adds: ['drive'],
   },
   translate: {

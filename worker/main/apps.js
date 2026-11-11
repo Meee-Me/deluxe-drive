@@ -48,8 +48,9 @@ export const APPS = {
   convert: {
     name: 'Deluxe Convert',
     about: 'Convert files in your browser',
-    url: 'https://deluxe-convert-cloud.deluxelordd.workers.dev',
+    url: 'https://deluxe-convert.vercel.app',
     origins: [
+      'https://deluxe-convert.vercel.app',
       'https://deluxe-convert-cloud.deluxelordd.workers.dev',
       'https://deluxe-convert.deluxelordd.workers.dev',
       'https://deluxe-convert.netlify.app',

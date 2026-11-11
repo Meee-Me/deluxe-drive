@@ -118,6 +118,6 @@ account menu, where they can be copied again or stopped.
 
 Directed by **Shivad Sujith**. AI support: **Claude**. Built with **FreeMilk**. Powered by
 **Netlify**. Other sites by Deluxe Lord — [Deluxe Main](https://deluxe-main.vercel.app) (your Deluxe account), [YouTube Guider AI](https://youtube-guide-ai.netlify.app/),
-[Deluxe Convert](https://deluxe-convert-cloud.deluxelordd.workers.dev),
+[Deluxe Convert](https://deluxe-convert.vercel.app),
 [Deluxe Translate](https://deluxe-translate-8m27.netlify.app/). The same list is in the app: the
 **credits** link on the lock screen, or **Credits** in the account menu.

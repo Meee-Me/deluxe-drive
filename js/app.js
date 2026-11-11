@@ -1667,8 +1667,8 @@ const CREDITS_SITES = [
   },
   {
     name: 'Deluxe Convert',
-    url: 'https://deluxe-convert-cloud.deluxelordd.workers.dev',
-    label: 'deluxe-convert-cloud.deluxelordd.workers.dev',
+    url: 'https://deluxe-convert.vercel.app',
+    label: 'deluxe-convert.vercel.app',
   },
   {
     name: 'Deluxe Translate',

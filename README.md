@@ -101,7 +101,7 @@ http://localhost:8787/main/api (as Vercel does).
 
 ## Deluxe Docs
 
-Deluxe Docs (`https://deluxe-docs-iota.vercel.app`) signs in with Deluxe Main by itself: no link ID.
+Deluxe Docs (`https://deluxe-docs-qtp5.vercel.app`) signs in with Deluxe Main by itself: no link ID.
 It reads the file list from Deluxe Main and the files from this server, with a key that can only read.
 Opening a document in the drive hands it to Docs through a share link
 (`…?url=<share link>&name=<file name>`); those links are listed under **Shared links** in the

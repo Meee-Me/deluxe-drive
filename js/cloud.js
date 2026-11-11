@@ -15,7 +15,7 @@
 const DEFAULT_MAIN = 'https://deluxe-main.vercel.app';
 const DEFAULT_SERVER = 'https://deluxe-drive.deluxelordd.workers.dev';
 // Where Deluxe Docs lives. Opening a document there passes a share link.
-export const DOCS_URL = 'https://deluxe-docs-iota.vercel.app';
+export const DOCS_URL = 'https://deluxe-docs-qtp5.vercel.app';
 
 const SESSION_KEY = 'dd.main.session';
 const SERVER_KEY = 'dd.server';

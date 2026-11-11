@@ -40,8 +40,8 @@ export const APPS = {
   docs: {
     name: 'Deluxe Docs',
     about: 'Open PDFs, Word, Excel and slides',
-    url: 'https://deluxe-docs-iota.vercel.app',
-    origins: ['https://deluxe-docs.deluxelordd.workers.dev', 'https://deluxe-docs-iota.vercel.app', 'https://deluxe-docs.netlify.app'],
+    url: 'https://deluxe-docs-qtp5.vercel.app',
+    origins: ['https://deluxe-docs-qtp5.vercel.app', 'https://deluxe-docs.deluxelordd.workers.dev', 'https://deluxe-docs-iota.vercel.app', 'https://deluxe-docs.netlify.app'],
     // Docs lists and opens the files kept in Deluxe Drive.
     reads: ['drive'],
   },

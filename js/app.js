@@ -1657,8 +1657,8 @@ const CREDITS_SITES = [
   },
   {
     name: 'Deluxe Docs',
-    url: 'https://deluxe-docs-iota.vercel.app',
-    label: 'deluxe-docs-iota.vercel.app',
+    url: 'https://deluxe-docs-qtp5.vercel.app',
+    label: 'deluxe-docs-qtp5.vercel.app',
   },
   {
     name: 'YouTube Guider AI',

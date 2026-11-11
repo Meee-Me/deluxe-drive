@@ -27,7 +27,7 @@ export const APPS = {
   drive: {
     name: 'Deluxe Drive',
     about: 'Keep and share your files',
-    url: 'https://deluxe-drive.deluxelordd.workers.dev',
+    url: 'https://deluxe-drive-xi.vercel.app',
     origins: [
       'https://deluxe-drive.deluxelordd.workers.dev',
       'https://deluxe-drive-xi.vercel.app',

@@ -6,7 +6,9 @@ This repository is **the one Deluxe server** on Cloudflare (`deluxe-drive.deluxe
   is copied from the Deluxe-Main repository by `tools/sync-main.sh` into `worker/main/`. Deluxe
   Main's website is **on Vercel** (https://deluxe-main.vercel.app, `MAIN_SITE`); it passes its
   `/api` requests on to here, and `/main/` here redirects to it.
-- everything else — **Deluxe Drive**, a Google Drive–style file manager.
+- everything else — **Deluxe Drive**, a Google Drive–style file manager. People open it at
+  **https://deluxe-drive-xi.vercel.app** (a Vercel copy of this repository's page, which uses this
+  Worker for files).
 
 Deluxe Drive never makes accounts: you sign in with your Deluxe account, or **continue as a guest**
 (files stay in that browser and move into your account when you sign in). Signing in is saved.

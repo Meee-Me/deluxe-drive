@@ -618,6 +618,12 @@ export class HubCore {
       if (reading && /^\/api\/(db\/blobs\/[^/]+|auth\/me)$/.test(path)) return [who, null];
       return [null, json(403, { error: 'This connection can only read documents.', code: 'read-only' })];
     }
+    // Deluxe Convert may upload new files (to save converted files here).
+    if (who.app === 'convert') {
+      const path = new URL(request.url).pathname;
+      if (request.method === 'PUT' && /^\/api\/db\/blobs\/[^/]+$/.test(path)) return [{ ...who, addOnly: true }, null];
+      return [null, json(403, { error: 'Deluxe Convert can only add files.', code: 'add-only' })];
+    }
     return [null, json(403, { error: 'This website cannot use Deluxe Drive.', code: 'forbidden' })];
   }
 
@@ -722,6 +728,9 @@ export class HubCore {
       if (denied) return denied;
       if (Number(request.headers.get('content-length') || 0) > this.maxUpload) {
         return json(413, { error: 'That file is too large for this server.' });
+      }
+      if (who.addOnly && this.blobInfo(who.userId, params.id)) {
+        return json(409, { error: 'That file is already there.', code: 'exists' });
       }
       const mime = String(request.headers.get('x-deluxe-mime') || request.headers.get('content-type') || 'application/octet-stream');
       const name = decodeSegment(String(request.headers.get('x-deluxe-name') || ''));

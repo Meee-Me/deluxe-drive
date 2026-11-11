@@ -7,7 +7,7 @@ import { mountPdf, mountScaled, closeViewer } from './viewer.js';
 // Bumped by hand with each deploy. It is printed on the lock screen so the
 // running build can be read out loud, which separates "stale cached page"
 // from "real bug" without guessing.
-const BUILD = 'build 34';
+const BUILD = 'build 35';
 
 // The drive signs in with Deluxe Main. The folder and file list and settings
 // are saved in Deluxe Main; the file contents in the Deluxe Drive server.
@@ -648,6 +648,7 @@ function openNodeMenu(id, anchor) {
         }
       }
       if (cloud.docsReady()) items.push({ action: 'docs', label: 'Open in Deluxe Docs', icon: 'doc' });
+      if (cloud.isOnline()) items.push({ action: 'convert', label: 'Convert with Deluxe Convert', icon: 'upload' });
     }
     items.push({
       action: 'star',
@@ -674,6 +675,17 @@ async function performNodeAction(action, id) {
 
   if (action === 'docs') {
     openInDocs(node);
+    return;
+  }
+
+  if (action === 'convert') {
+    try {
+      await cloud.openInConvert(node);
+      state.shared.add(node.id);
+      render();
+    } catch (error) {
+      toast(error.message || 'Could not open Deluxe Convert');
+    }
     return;
   }
 
@@ -2175,6 +2187,24 @@ function bindUI() {
 /* ------------------------------------------------------------------ */
 /* Boot                                                                */
 /* ------------------------------------------------------------------ */
+
+// Coming back to the drive's tab shows files added elsewhere (Deluxe Convert).
+let refreshing = false;
+document.addEventListener('visibilitychange', async () => {
+  if (document.hidden || refreshing || !state.currentUser || cloud.isGuest()) return;
+  refreshing = true;
+  try {
+    const before = state.nodes.size;
+    await loadNodes();
+    render();
+    const added = state.nodes.size - before;
+    if (added > 0) toast(`${added} new item${added === 1 ? '' : 's'} in your drive`);
+  } catch (error) {
+    /* try again next time */
+  } finally {
+    refreshing = false;
+  }
+});
 
 async function enterApp(user) {
   state.currentUser = user;

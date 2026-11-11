@@ -9,6 +9,7 @@
 //            which only that site's owner can create. Never use it for
 //            vercel.app names: anyone can make "deluxe-docs-anything".
 //   reads    other apps' data this site may read (never write)
+//   adds     other apps' data this site may add new items to (never read or change)
 //   url      where the site lives, for the list on Deluxe Main's home page
 //   keyHash  SHA-256 (hex) of the key that site's own server uses to save data
 //            for its users (Authorization: App <key>). A Worker secret
@@ -56,6 +57,8 @@ export const APPS = {
       'https://deluxe-convert.netlify.app',
     ],
     reads: [],
+    // Converted files can be saved into Deluxe Drive (new files only).
+    adds: ['drive'],
   },
   translate: {
     name: 'Deluxe Translate',

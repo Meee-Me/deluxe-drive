@@ -476,6 +476,32 @@ export async function openInDocs(node) {
   }
 }
 
+// Where Deluxe Convert lives. "Convert with Deluxe Convert" opens it with the
+// file already added (through a share link, so Convert needs nothing else).
+export const CONVERT_URL = 'https://deluxe-convert.vercel.app';
+
+export async function openInConvert(node) {
+  if (!isOnline()) throw new Error('Sign in to send files to Deluxe Convert.');
+  const tab = window.open('about:blank', '_blank');
+  try {
+    const share = await shareFile(node.id, node.name);
+    const target = new URL(CONVERT_URL);
+    target.searchParams.set('url', share.url);
+    target.searchParams.set('name', node.name);
+    if (tab) tab.location.href = target.toString();
+    else location.href = target.toString();
+  } catch (error) {
+    if (tab) {
+      try {
+        tab.close();
+      } catch (closeError) {
+        /* already gone */
+      }
+    }
+    throw error;
+  }
+}
+
 export function storageLabel() {
   return 'Deluxe Drive (files) and Deluxe Main (everything else)';
 }

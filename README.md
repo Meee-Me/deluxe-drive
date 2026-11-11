@@ -50,6 +50,10 @@ Deluxe Drive never makes accounts: you sign in with your Deluxe account, or **co
 - **Deluxe Docs** — Docs signs in with Deluxe Main too, and lists and opens your drive's files (read
   only). Opening a document here shares it and opens it in Deluxe Docs (turn this off under **Deluxe
   Docs** in the account menu); if that fails, it opens in the built-in preview.
+- **Deluxe Convert** — a file's menu has **Convert with Deluxe Convert**, which opens Convert with the
+  file already added (through a share link). In Convert, **Save to Drive** puts a converted file in a
+  **Deluxe Convert** folder here; coming back to the drive's tab shows it. Through Deluxe Main, Convert
+  may only add new files: it cannot see, change or delete anything in the drive.
 - **More websites** — a button in the top bar (and a link on the lock screen) opens a list of the
   other Deluxe Lord sites: YouTube Guider AI, Deluxe Convert and Deluxe Translate.
 - **Select mode** — select several items and download, star, move or delete them together, plus

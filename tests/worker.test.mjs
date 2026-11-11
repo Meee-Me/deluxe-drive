@@ -19,6 +19,7 @@ const keys = new Map([
   ['k_docs', { user: { id: 'u_a', name: 'Shivad' }, app: 'docs' }],
   ['k_translate', { user: { id: 'u_a', name: 'Shivad' }, app: 'translate' }],
   ['k_other', { user: { id: 'u_b', name: 'Other' }, app: 'drive' }],
+  ['k_convert', { user: { id: 'u_a', name: 'Shivad' }, app: 'convert' }],
 ]);
 let mainCalls = 0;
 let mainDown = false;
@@ -129,6 +130,16 @@ assert.equal((await call('DELETE', '/api/db/blobs/f_1', { token: V })).status, 4
 assert.equal((await call('POST', '/api/files/f_1/share', { token: V })).status, 403);
 assert.equal((await call('POST', '/api/db/clear', { token: V })).status, 403);
 ok('docs key reads files only');
+
+// Deluxe Convert adds new files, and nothing else
+assert.equal((await call('PUT', '/api/db/blobs/conv_1', { token: 'k_convert', raw: new Uint8Array(3), headers: { 'Content-Length': '3' } })).status, 201);
+assert.equal((await call('PUT', '/api/db/blobs/conv_1', { token: 'k_convert', raw: new Uint8Array(4), headers: { 'Content-Length': '4' } })).status, 409, 'no overwriting');
+assert.equal((await call('PUT', '/api/db/blobs/f_1', { token: 'k_convert', raw: new Uint8Array(4), headers: { 'Content-Length': '4' } })).status, 409);
+assert.equal((await call('GET', '/api/db/blobs/conv_1', { token: 'k_convert' })).status, 403, 'no reading');
+assert.equal((await call('DELETE', '/api/db/blobs/conv_1', { token: 'k_convert' })).status, 403, 'no deleting');
+assert.equal((await call('GET', '/api/db/blobs/conv_1', { token: T })).status, 200, 'the owner sees it');
+await call('DELETE', '/api/db/blobs/conv_1', { token: T });
+ok('convert key only adds new files');
 
 // accounts are isolated
 assert.equal((await call('GET', '/api/db/blobs/f_1', { token: 'k_other' })).status, 404);

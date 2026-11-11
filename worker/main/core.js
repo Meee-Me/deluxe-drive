@@ -422,6 +422,12 @@ export class MainCore {
     return who.app === 'main' || who.app === app;
   }
 
+  // Some websites may add new items to another website's data, never read
+  // or change what is there (Deluxe Convert saving files into Deluxe Drive).
+  canAdd(who, app) {
+    return !!APPS[who.app] && (APPS[who.app].adds || []).includes(app);
+  }
+
   /* ---------------- data ---------------- */
 
   listData(accountId, app, { prefix = '', desc = false, limit = MAX_LIST, values = true } = {}) {
@@ -837,11 +843,12 @@ export class MainCore {
 
     /* ---- data the websites save ---- */
 
-    const dataAccess = async (request, app, writing) => {
+    const dataAccess = async (request, app, writing, { adding = false } = {}) => {
       if (!APPS[app]) return [null, json(404, { error: 'There is no Deluxe website called that.' })];
       const [who, denied] = await this.need(request);
       if (denied) return [null, denied];
       if (!who.account) return [null, json(404, { error: 'That account is not here.', code: 'no-account' })];
+      if (writing && adding && !this.canWrite(who, app) && this.canAdd(who, app)) return [{ ...who, addOnly: true }, null];
       if (writing ? !this.canWrite(who, app) : !this.canRead(who, app)) {
         return [null, json(403, { error: `This website cannot ${writing ? 'change' : 'read'} ${APPS[app].name} data.`, code: 'forbidden' })];
       }
@@ -893,9 +900,18 @@ export class MainCore {
     });
 
     r('PUT', '/api/data/:app/:key', async ({ request, params }) => {
-      const [who, denied] = await dataAccess(request, params.app, true);
+      const [who, denied] = await dataAccess(request, params.app, true, { adding: true });
       if (denied) return denied;
       const body = await readJsonBody(request);
+      // Add-only: a new file or folder record of this account, nothing else.
+      if (who.addOnly) {
+        const value = body.value;
+        if (!/^node:[A-Za-z0-9_-]{1,120}$/.test(params.key) || !value || typeof value !== 'object' || `node:${value.id}` !== params.key) {
+          return json(400, { error: 'Only new file records can be added.' });
+        }
+        if (value.ownerId !== who.account.id) return json(400, { error: 'That file record is not for this account.' });
+        if (this.getData(who.account.id, params.app, params.key)) return json(409, { error: 'That is already there.', code: 'exists' });
+      }
       try {
         this.putData(who.account.id, params.app, params.key, body.value);
       } catch (error) {

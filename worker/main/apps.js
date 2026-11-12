@@ -108,6 +108,14 @@ export const APPS = {
     // Only this fingerprint is here; the key itself is only on Vercel.
     keyHash: 'f76bda7a47eb72da8133d8fda903e4334b9503644d254439cea483789e0ea976',
   },
+  edit: {
+    name: 'Fast Edit',
+    about: 'Edit photos and videos with AI',
+    url: 'https://fastedit.vercel.app',
+    origins: ['https://fastedit.vercel.app'],
+    // Saves its own data only (your saved looks); never reads or adds to other websites.
+    reads: [],
+  },
   transfer: {
     name: 'Deluxe Transfer',
     about: 'Send files with a code',

@@ -107,10 +107,12 @@ export const APPS = {
     url: 'https://deluxe-transfer.vercel.app',
     origins: ['https://deluxe-transfer.vercel.app'],
     reads: [],
-    // Sends a Deluxe Mail message (with the transfer's link) to the person
-    // files are shared with, and a copy to the sender's Sent. It can only add
-    // new messages: it never reads, changes or deletes anyone's mail.
-    adds: ['mail'],
+    // Sends a Deluxe Mail message (with the transfer's link) to the people
+    // files are shared with, and a copy to the sender's Sent; and saves
+    // received files into the person's own Deluxe Drive ("Save to Deluxe
+    // Drive"). It can only add: it never reads, changes or deletes anyone's
+    // mail or files.
+    adds: ['mail', 'drive'],
     // SHA-256 of the key Deluxe Transfer's server sends (MAIN_APP_KEY on Vercel).
     keyHash: 'ac9a67e79f364e9c5984d9c3b1ba3f9493e036a2f2766d9c1f22f09ea734a60c',
   },

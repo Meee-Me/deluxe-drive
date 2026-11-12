@@ -137,6 +137,28 @@ export function handleFor(name) {
     .slice(0, 30);
 }
 
+// What a website with "adds" rights may add to another website's data.
+const MAIL_MESSAGE_KEY = /^(inbox|sent)\/[0-9]{13}-[0-9A-Za-z-]{1,64}$/;
+function addOnlyProblem(app, key, value, accountId) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 'Only new items can be added.';
+  if (app === 'drive') {
+    // a new file or folder record of this account
+    if (!/^node:[A-Za-z0-9_-]{1,120}$/.test(key) || `node:${value.id}` !== key) return 'Only new file records can be added.';
+    if (value.ownerId !== accountId) return 'That file record is not for this account.';
+    return '';
+  }
+  if (app === 'mail') {
+    // a new Deluxe Mail message in Inbox or Sent
+    if (!MAIL_MESSAGE_KEY.test(key) || value.key !== key || value.folder !== key.split('/')[0]) return 'Only new mail messages can be added.';
+    for (const field of ['from', 'to', 'subject', 'body']) {
+      if (typeof value[field] !== 'string') return 'That mail message is missing its ' + field + '.';
+    }
+    if (value.body.length > 50000 || value.subject.length > 300) return 'That mail message is too long.';
+    return '';
+  }
+  return 'Only new items can be added.';
+}
+
 function publicUser(account) {
   return { id: account.id, name: account.name, handle: account.handle };
 }
@@ -903,13 +925,10 @@ export class MainCore {
       const [who, denied] = await dataAccess(request, params.app, true, { adding: true });
       if (denied) return denied;
       const body = await readJsonBody(request);
-      // Add-only: a new file or folder record of this account, nothing else.
+      // Add-only: something new for this account, never a change to what is there.
       if (who.addOnly) {
-        const value = body.value;
-        if (!/^node:[A-Za-z0-9_-]{1,120}$/.test(params.key) || !value || typeof value !== 'object' || `node:${value.id}` !== params.key) {
-          return json(400, { error: 'Only new file records can be added.' });
-        }
-        if (value.ownerId !== who.account.id) return json(400, { error: 'That file record is not for this account.' });
+        const problem = addOnlyProblem(params.app, params.key, body.value, who.account.id);
+        if (problem) return json(400, { error: problem });
         if (this.getData(who.account.id, params.app, params.key)) return json(409, { error: 'That is already there.', code: 'exists' });
       }
       try {

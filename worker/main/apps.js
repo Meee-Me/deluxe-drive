@@ -9,7 +9,8 @@
 //            which only that site's owner can create. Never use it for
 //            vercel.app names: anyone can make "deluxe-docs-anything".
 //   reads    other apps' data this site may read (never write)
-//   adds     other apps' data this site may add new items to (never read or change)
+//   adds     other apps' data this site may add new items to (never read or change):
+//            Drive file records, or Deluxe Mail messages (inbox/ and sent/ only)
 //   url      where the site lives, for the list on Deluxe Main's home page
 //   keyHash  SHA-256 (hex) of the key that site's own server uses to save data
 //            for its users (Authorization: App <key>). A Worker secret
@@ -99,6 +100,19 @@ export const APPS = {
     // SHA-256 of the key Deluxe Mail's server sends (MAIN_APP_KEY on Vercel).
     // Only this fingerprint is here; the key itself is only on Vercel.
     keyHash: 'f76bda7a47eb72da8133d8fda903e4334b9503644d254439cea483789e0ea976',
+  },
+  transfer: {
+    name: 'Deluxe Transfer',
+    about: 'Send files with a code',
+    url: 'https://deluxe-transfer.vercel.app',
+    origins: ['https://deluxe-transfer.vercel.app'],
+    reads: [],
+    // Sends a Deluxe Mail message (with the transfer's link) to the person
+    // files are shared with, and a copy to the sender's Sent. It can only add
+    // new messages: it never reads, changes or deletes anyone's mail.
+    adds: ['mail'],
+    // SHA-256 of the key Deluxe Transfer's server sends (MAIN_APP_KEY on Vercel).
+    keyHash: 'ac9a67e79f364e9c5984d9c3b1ba3f9493e036a2f2766d9c1f22f09ea734a60c',
   },
 };
 

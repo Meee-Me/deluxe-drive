@@ -84,6 +84,13 @@ export const APPS = {
     ],
     reads: [],
   },
+  max: {
+    name: 'Max Tutor',
+    about: 'Your AI tutor',
+    url: 'https://learning-ai-lilac.vercel.app',
+    origins: ['https://learning-ai-lilac.vercel.app'],
+    reads: [],
+  },
   meet: {
     name: 'Deluxe Meet',
     about: 'Video calls in your browser',

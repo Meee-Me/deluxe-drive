@@ -48,6 +48,12 @@ function write(key, value) {
   }
 }
 
+// Older versions saved where Deluxe Main, the drive server and Deluxe Docs
+// were. Those addresses have moved since, and nothing lets anyone change them
+// any more, so the saved ones are dropped and the current addresses used.
+write(MAIN_KEY, '');
+write(SERVER_KEY, '');
+
 export function normalizeServer(value) {
   let raw = String(value || '').trim();
   if (!raw) return null;
@@ -424,16 +430,16 @@ export function docsSettings() {
   try {
     const parsed = JSON.parse(read(DOCS_KEY) || 'null');
     if (!parsed) return { ...DOCS_DEFAULTS };
-    return { url: typeof parsed.url === 'string' && parsed.url ? parsed.url : DOCS_URL, autoOpen: parsed.autoOpen !== false };
+    // Only the "open automatically" choice is kept; Deluxe Docs is always at DOCS_URL.
+    return { url: DOCS_URL, autoOpen: parsed.autoOpen !== false };
   } catch (error) {
     return { ...DOCS_DEFAULTS };
   }
 }
 
 export function saveDocsSettings(next) {
-  const value = { url: typeof next.url === 'string' && next.url ? next.url : DOCS_URL, autoOpen: next.autoOpen !== false };
-  write(DOCS_KEY, JSON.stringify(value));
-  return value;
+  write(DOCS_KEY, JSON.stringify({ autoOpen: next.autoOpen !== false }));
+  return { url: DOCS_URL, autoOpen: next.autoOpen !== false };
 }
 
 export function docsReady() {

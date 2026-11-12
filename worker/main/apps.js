@@ -111,8 +111,8 @@ export const APPS = {
   edit: {
     name: 'Fast Edit',
     about: 'Edit photos and videos with AI',
-    url: 'https://fastedit.vercel.app',
-    origins: ['https://fastedit.vercel.app'],
+    url: 'https://fast-edit-nine.vercel.app',
+    origins: ['https://fast-edit-nine.vercel.app', 'https://fastedit.vercel.app'],
     // Saves its own data only (your saved looks); never reads or adds to other websites.
     reads: [],
   },

@@ -606,7 +606,8 @@ export class HubCore {
   }
 
   // Returns [session, null], or [null, an error response]. Deluxe Drive's own
-  // page and Deluxe Main may do everything; Deluxe Docs may only read files.
+  // page and Deluxe Main may do everything; Deluxe Docs may only read files;
+  // Deluxe Convert may open and add files; Deluxe Transfer may only add files.
   async need(request) {
     const token = bearerToken(request);
     const who = token ? await this.verify(token) : null;
@@ -625,6 +626,12 @@ export class HubCore {
       // ...and open files from the drive ("Add from Drive"), read only.
       if ((request.method === 'GET' || request.method === 'HEAD') && /^\/api\/db\/blobs\/[^/]+$/.test(path)) return [who, null];
       return [null, json(403, { error: 'Deluxe Convert can only open and add files.', code: 'add-only' })];
+    }
+    // Deluxe Transfer may only upload new files ("Save to Deluxe Drive").
+    if (who.app === 'transfer') {
+      const path = new URL(request.url).pathname;
+      if (request.method === 'PUT' && /^\/api\/db\/blobs\/[^/]+$/.test(path)) return [{ ...who, addOnly: true }, null];
+      return [null, json(403, { error: 'Deluxe Transfer can only add files.', code: 'add-only' })];
     }
     return [null, json(403, { error: 'This website cannot use Deluxe Drive.', code: 'forbidden' })];
   }

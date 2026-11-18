@@ -119,8 +119,8 @@ export const APPS = {
   kickoff: {
     name: 'Nitro Kickoff',
     about: 'Rocket-car soccer against a bot',
-    url: 'https://nitro-kickoff.vercel.app',
-    origins: ['https://nitro-kickoff.vercel.app'],
+    url: 'https://rocket-league-blond.vercel.app',
+    origins: ['https://rocket-league-blond.vercel.app'],
     // A Deluxe Games website. Saves its own data only (match record and
     // settings); never reads or adds to other websites.
     reads: [],

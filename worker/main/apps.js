@@ -116,6 +116,15 @@ export const APPS = {
     // Saves its own data only (your saved looks); never reads or adds to other websites.
     reads: [],
   },
+  kickoff: {
+    name: 'Nitro Kickoff',
+    about: 'Rocket-car soccer against a bot',
+    url: 'https://nitro-kickoff.vercel.app',
+    origins: ['https://nitro-kickoff.vercel.app'],
+    // A Deluxe Games website. Saves its own data only (match record and
+    // settings); never reads or adds to other websites.
+    reads: [],
+  },
   transfer: {
     name: 'Deluxe Transfer',
     about: 'Send files with a code',

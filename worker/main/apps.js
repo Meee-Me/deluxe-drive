@@ -125,6 +125,17 @@ export const APPS = {
     // settings); never reads or adds to other websites.
     reads: [],
   },
+  advocate: {
+    name: 'Advocate AI India',
+    about: 'AI assistant for Indian advocates',
+    // Shown in "Deluxe chatbots" on Deluxe Main's home page.
+    category: 'chatbots',
+    // The link on the home page. It does NOT let the site sign in: that only works from addresses listed in
+    // `origins` or the APP_ORIGINS variable, e.g. {"advocate": ["https://advocate-ai-india.vercel.app"]}. Never a wildcard.
+    url: 'https://advocate-ai-india.vercel.app',
+    origins: [],
+    reads: [],
+  },
   transfer: {
     name: 'Deluxe Transfer',
     about: 'Send files with a code',
@@ -196,5 +207,6 @@ export function publicApps(env = {}) {
     name: APPS[id].name,
     about: APPS[id].about,
     url: APPS[id].url || (table[id][0] && !table[id][0].includes('*') ? table[id][0] : ''),
+    ...(APPS[id].category ? { category: APPS[id].category } : {}),
   }));
 }

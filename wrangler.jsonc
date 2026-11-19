@@ -37,6 +37,31 @@
   // Secrets (npx wrangler secret put NAME): APP_KEY_MAIL, the key Deluxe Mail's
   // server uses to save mail in Deluxe Main.
 
+  // Worker Previews: Cloudflare runs `npx wrangler preview` for pull-request branches. A Preview inherits
+  // NOTHING above except the assets, compatibility date and migrations, so everything it needs is declared
+  // here with safe, non-production values. Production (everything above) is unaffected by this block.
+  "previews": {
+    // Each Preview gets its own NEW Durable Object namespace and storage, because these classes are
+    // defined in this Worker (no script_name). A Preview can never read or write production accounts or files.
+    // The bindings are declared because the code reads env.HUB and env.MAIN.
+    "durable_objects": {
+      "bindings": [
+        { "name": "HUB", "class_name": "Hub" },
+        { "name": "MAIN", "class_name": "Main" }
+      ]
+    },
+    "vars": {
+      // An address that can never resolve (".invalid" is reserved), so a Preview never redirects to or talks
+      // to the production Deluxe Main site. It must not be empty: the Worker falls back to production if it is.
+      // Sign-in pages are therefore not available in a Preview; use a staging Deluxe Main address here if one exists.
+      "MAIN_SITE": "https://preview-main.invalid",
+      // No extra sign-in websites in Previews.
+      "APP_ORIGINS": "{}"
+    }
+    // No secrets here (they cannot be stored in this file). Previews start with none: production secrets are
+    // never copied. Add Preview-only ones with `npx wrangler preview secret put NAME`.
+  }
+
   // File contents are kept in the Durable Object's database by default, which
   // needs nothing set up and works on a free account. For a large drive, enable
   // R2, create a bucket, and add it here: the drive then stores files in R2.

@@ -130,10 +130,11 @@ export const APPS = {
     about: 'AI assistant for Indian advocates',
     // Shown in "Deluxe chatbots" on Deluxe Main's home page.
     category: 'chatbots',
-    // The link on the home page. It does NOT let the site sign in: that only works from addresses listed in
-    // `origins` or the APP_ORIGINS variable, e.g. {"advocate": ["https://advocate-ai-india.vercel.app"]}. Never a wildcard.
+    // The link on the home page.
     url: 'https://advocate-ai-india.vercel.app',
-    origins: [],
+    // The one address this site may sign in from. Exact match only: never a wildcard (anyone can create
+    // "advocate-anything.vercel.app"), and a new address needs its own entry here or in APP_ORIGINS.
+    origins: ['https://advocate-ai-india.vercel.app'],
     reads: [],
   },
   transfer: {

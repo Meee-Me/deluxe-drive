@@ -6,6 +6,11 @@ This repository is **the one Deluxe server** on Cloudflare (`deluxe-drive.deluxe
   is copied from the Deluxe-Main repository by `tools/sync-main.sh` into `worker/main/`. Deluxe
   Main's website is **on Vercel** (https://deluxe-main.vercel.app, `MAIN_SITE`); it passes its
   `/api` requests on to here, and `/main/` here redirects to it.
+- `/arena/CODE` — **online rooms for Deluxe Games** (WebSocket, `worker/arena.js`, the `Arena` Durable Object, one per
+  5-letter code). It only relays messages between the players of a room: the host's browser runs the match and
+  the others send their controls. A player gets in only with a Deluxe Main key made for Nitro Kickoff
+  (sent as the WebSocket subprotocol `deluxe.<key>`), from that website's address, and the name in the room is the
+  account's name. Needs the `ARENA` binding and the `v3` migration in `wrangler.jsonc`. See `tests/arena.live.test.mjs`.
 - everything else — **Deluxe Drive**, a Google Drive–style file manager. People open it at
   **https://deluxe-drive-xi.vercel.app** (a Vercel copy of this repository's page, which uses this
   Worker for files).

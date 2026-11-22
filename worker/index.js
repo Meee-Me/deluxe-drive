@@ -15,6 +15,10 @@
 import { DurableObject } from 'cloudflare:workers';
 import { HubCore } from './hub.js';
 import { MainCore } from './main/core.js';
+import { appForOrigin } from './main/apps.js';
+import { Arena } from './arena.js';
+
+export { Arena };
 
 const INTERNAL = 'https://deluxe.internal';
 const DEFAULT_MAIN_SITE = 'https://deluxe-main.vercel.app';
@@ -80,6 +84,27 @@ function missing(request, name) {
   );
 }
 
+// The browser sends its Deluxe key as a WebSocket subprotocol ("deluxe.<key>"):
+// WebSockets cannot set headers, and this keeps the key out of the address.
+async function arenaRoute(request, env, code, url) {
+  const fail = (status, error) => new Response(JSON.stringify({ error }), { status, headers: { 'Content-Type': 'application/json' } });
+  if (request.headers.get('Upgrade') !== 'websocket') return fail(426, 'Open this address as a WebSocket.');
+  if (!env.ARENA || !env.MAIN) return fail(503, 'Online rooms are not set up on this server.');
+  if (appForOrigin(request.headers.get('Origin'), env, 'kickoff') !== 'kickoff') return fail(403, 'This website cannot use Deluxe Games rooms.');
+  const protocol = (request.headers.get('Sec-WebSocket-Protocol') || '').split(',').map((x) => x.trim()).find((x) => x.startsWith('deluxe.'));
+  if (!protocol) return fail(401, 'Sign in with Deluxe Main first.');
+  const who = await mainStub(env).fetch(new Request(`${INTERNAL}/api/auth/me`, { headers: { Authorization: `Bearer ${protocol.slice(7)}` } }));
+  if (!who.ok) return fail(401, 'Sign in with Deluxe Main again.');
+  const me = await who.json();
+  if (!me.user || me.app !== 'kickoff') return fail(401, 'This sign-in is not for Nitro Kickoff.');
+  const headers = new Headers(request.headers);
+  headers.set('Sec-WebSocket-Protocol', protocol);
+  headers.set('X-Arena-Id', String(me.user.id));
+  headers.set('X-Arena-Name', String(me.user.name));
+  headers.set('X-Arena-Create', url.searchParams.get('create') === '1' ? '1' : '0');
+  return env.ARENA.get(env.ARENA.idFromName(code)).fetch(new Request(request, { headers }));
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -99,6 +124,11 @@ export default {
       const site = String(env.MAIN_SITE || DEFAULT_MAIN_SITE).replace(/\/+$/, '');
       return Response.redirect(`${site}${pathname.slice('/main'.length) || '/'}${url.search}`, 302);
     }
+
+    // Online rooms for Deluxe Games: /arena/ABCD (WebSocket). Only a signed-in Deluxe
+    // account, from a listed Deluxe Games website, gets in.
+    const room = /^\/arena\/([A-HJ-NP-Z]{5})$/.exec(pathname);
+    if (room) return arenaRoute(request, env, room[1], url);
 
     if (/^\/(api|s)\//.test(pathname)) {
       if (!env.HUB) return missing(request, 'Hub');

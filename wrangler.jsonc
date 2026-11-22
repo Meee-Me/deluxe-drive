@@ -19,12 +19,14 @@
   "durable_objects": {
     "bindings": [
       { "name": "HUB", "class_name": "Hub" },
-      { "name": "MAIN", "class_name": "Main" }
+      { "name": "MAIN", "class_name": "Main" },
+      { "name": "ARENA", "class_name": "Arena" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Hub"] },
-    { "tag": "v2", "new_sqlite_classes": ["Main"] }
+    { "tag": "v2", "new_sqlite_classes": ["Main"] },
+    { "tag": "v3", "new_sqlite_classes": ["Arena"] }
   ],
 
   "vars": {
@@ -47,7 +49,8 @@
     "durable_objects": {
       "bindings": [
         { "name": "HUB", "class_name": "Hub" },
-        { "name": "MAIN", "class_name": "Main" }
+        { "name": "MAIN", "class_name": "Main" },
+      { "name": "ARENA", "class_name": "Arena" }
       ]
     },
     "vars": {

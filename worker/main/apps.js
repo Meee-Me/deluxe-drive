@@ -137,6 +137,13 @@ export const APPS = {
     origins: ['https://advocate-ai-india.vercel.app'],
     reads: [],
   },
+  search: {
+    name: 'Deluxe Search',
+    about: 'Search the web with AI',
+    url: 'https://deluxe-search-engine.vercel.app',
+    origins: ['https://deluxe-search-engine.vercel.app'],
+    reads: [],
+  },
   transfer: {
     name: 'Deluxe Transfer',
     about: 'Send files with a code',

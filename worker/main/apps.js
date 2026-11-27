@@ -137,6 +137,17 @@ export const APPS = {
     origins: ['https://advocate-ai-india.vercel.app'],
     reads: [],
   },
+  messenger: {
+    name: 'Deluxe Messenger',
+    about: 'Private, end-to-end encrypted chat',
+    // The link on the home page.
+    url: 'https://deluxe-messenger.vercel.app',
+    // The one address this site may sign in from. Exact match only: never a wildcard (anyone can create
+    // "deluxe-messenger-anything.vercel.app"). Its server (a Supabase Edge Function) only asks Deluxe Main
+    // who a sign-in belongs to; it saves nothing here, so it has no key, reads nothing and adds nothing.
+    origins: ['https://deluxe-messenger.vercel.app'],
+    reads: [],
+  },
   transfer: {
     name: 'Deluxe Transfer',
     about: 'Send files with a code',

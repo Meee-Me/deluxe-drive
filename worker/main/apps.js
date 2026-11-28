@@ -102,9 +102,7 @@ export const APPS = {
     name: 'Deluxe Mail',
     about: 'Your @deluxemail.com inbox',
     url: 'https://deluxe-mail.vercel.app',
-    // Exact addresses only: never a wildcard (anyone can register a Vercel project called "deluxe-mail-anything-deluxe12").
-    // The second is one existing per-deployment address. Another preview address needs its own entry here, or in APP_ORIGINS.
-    origins: ['https://deluxe-mail.vercel.app', 'https://deluxe-mail-q1ga6cmso-deluxe12.vercel.app'],
+    origins: ['https://deluxe-mail.vercel.app'],
     reads: [],
     // SHA-256 of the key Deluxe Mail's server sends (MAIN_APP_KEY on Vercel).
     // Only this fingerprint is here; the key itself is only on Vercel.
@@ -139,22 +137,19 @@ export const APPS = {
     origins: ['https://advocate-ai-india.vercel.app'],
     reads: [],
   },
-  messenger: {
-    name: 'Deluxe Messenger',
-    about: 'Private, end-to-end encrypted chat',
-    // The link on the home page.
-    url: 'https://deluxe-messenger.vercel.app',
-    // The one address this site may sign in from. Exact match only: never a wildcard (anyone can create
-    // "deluxe-messenger-anything.vercel.app"). Its server (a Supabase Edge Function) only asks Deluxe Main
-    // who a sign-in belongs to; it saves nothing here, so it has no key, reads nothing and adds nothing.
-    origins: ['https://deluxe-messenger.vercel.app'],
-    reads: [],
-  },
   search: {
     name: 'Deluxe Search',
     about: 'Search the web with AI',
     url: 'https://deluxe-search-engine.vercel.app',
     origins: ['https://deluxe-search-engine.vercel.app'],
+    reads: [],
+  },
+  maps: {
+    name: 'Deluxe Maps',
+    about: 'Find places and get directions',
+    url: 'https://deluxe-maps.vercel.app',
+    origins: ['https://deluxe-maps.vercel.app'],
+    // Only signs you in; saves its own data only, never reads or adds to other websites.
     reads: [],
   },
   transfer: {
